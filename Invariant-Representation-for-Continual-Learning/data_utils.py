@@ -5,8 +5,13 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import copy
-from scipy.misc import imsave
-from scipy.misc import imresize
+
+# Fix for Downloading MNIST giving HTTP Error 403:
+# https://github.com/pytorch/vision/issues/1938#issuecomment-594623431
+from six.moves import urllib
+opener = urllib.request.build_opener()
+opener.addheaders = [('User-agent', 'Mozilla/5.0')]
+urllib.request.install_opener(opener)
 
 def get_train_loader(train_dataset,batch_size):
     train_loader = DataLoader(
