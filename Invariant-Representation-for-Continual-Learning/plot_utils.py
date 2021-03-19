@@ -1,7 +1,8 @@
 import numpy as np
-from scipy.misc import imsave
-from scipy.misc import imresize
+from imageio import imwrite
+from PIL import Image
 
+imsave = imwrite
 # this function is borrowed from https://github.com/hwalsuklee/tensorflow-mnist-AAE/blob/master/plot_utils.py
 class plot_samples():
     def __init__(self, DIR, n_img_x=8, n_img_y=8, img_w=28, img_h=28):
@@ -26,6 +27,8 @@ class plot_samples():
         for idx, image in enumerate(images):
             i = int(idx % size[1])
             j = int(idx / size[1])
-            image_ = imresize(image, size=(w,h), interp='bicubic')
+            image_ = Image.fromarray(image.numpy())
+            image_ = np.array(image_.resize((w, h), Image.BICUBIC))
+	    
             img[j*h:j*h+h, i*w:i*w+w] = image_
         return img
