@@ -2,6 +2,7 @@
 # This is the implementation for the Learning Invariant Representation for Continual Learning paper in AAAI workshop on Meta-Learning for Computer Vision
 
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import copy
@@ -30,14 +31,37 @@ def get_test_loader(test_dataset,test_batch_size):
         pin_memory=True)
     return test_loader
 
-def load_data():
+def load_data(dataset):
     transform = transforms.Compose([transforms.ToTensor()])
-    full_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST('./data', train=False, transform=transform)
+    if dataset == "MNIST":
+        full_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+        test_dataset = datasets.MNIST('./data', train=False, transform=transform)
+    elif dataset == "EMNIST":
+        full_dataset = datasets.EMNIST('./data', split="mnist", train=True, download=True, transform=transform)
+        test_dataset = datasets.EMNIST('./data', split="mnist", train=False, transform=transform)
+    elif dataset == "Fashion-MNIST":
+        full_dataset = datasets.FashionMNIST('./data', train=True, download=True, transform=transform)
+        test_dataset = datasets.FashionMNIST('./data', train=False, transform=transform)
+    elif dataset == "CIFAR10":
+        full_dataset = datasets.CIFAR10('./data', train=True, download=True, transform=transform)
+        test_dataset = datasets.CIFAR10('./data', train=False, transform=transform)
+        #full_dataset.data = full_dataset.data.astype(np.uint8)
+        #test_dataset.data = test_dataset.data.astype(np.uint8)
+        full_dataset.targets = torch.Tensor(full_dataset.targets).type(torch.int64)
+        test_dataset.targets = torch.Tensor(test_dataset.targets).type(torch.int64)
+    elif dataset == "SVHN":
+        full_dataset = datasets.SVHN('./data', split='train', download=True, transform=transform)
+        test_dataset = datasets.SVHN('./data', split='test', download=True, transform=transform)
+        full_dataset.targets = full_dataset.labels
+        test_dataset.targets = test_dataset.labels
+    else:
+        print("Invalid Dataset")
+        exit()
+
     return full_dataset,test_dataset
 
-def task_construction(task_labels):
-    full_dataset,test_dataset = load_data()
+def task_construction(task_labels, dataset):
+    full_dataset,test_dataset = load_data(dataset)
     train_dataset = split_dataset_by_labels(full_dataset, task_labels)
     test_dataset = split_dataset_by_labels(test_dataset, task_labels)
     return train_dataset,test_dataset

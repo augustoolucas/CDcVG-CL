@@ -26,6 +26,7 @@ def parse_args():
     parser.add_argument("--img_size", type=int, default=28, help="dimensionality of the input image")
     parser.add_argument("--channels", type=int, default=1, help="dimensionality of the input channels")
     parser.add_argument("--n_classes", type=int, default=10, help="total number of classes")
+    parser.add_argument("--dataset", type=str, default="MNIST", help="Options: MNIST, EMNIST, Fashion-MNIST, CIFAR10, SVHN")
 
     # architecture
     parser.add_argument("--latent_dim", type=int, default=32, help="dimensionality of the latent code")
@@ -68,7 +69,7 @@ def check_args(args):
     return args
 
 def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_labels, device):
-    plotter = plot_utils.plot_samples(args.results_path, args.n_img_x, args.n_img_y, args.img_size, args.img_size)
+    plotter = plot_utils.plot_samples(args.results_path, args.n_img_x, args.n_img_y, args.img_size, args.img_size, args.channels)
     # plot samples of the reconstructed images from the first batch of the test set of the current task
     for test_batch_idx, (test_data, test_target) in enumerate(test_loader):  
         test_data, test_target = test_data.to(device), test_target.to(device)                  
@@ -80,7 +81,11 @@ def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_l
         with torch.no_grad():
             z,_,_ = encoder(x)
             reconstructed_x = decoder(torch.cat([z, x_id_onehot], dim=1))
-            reconstructed_x = reconstructed_x.reshape(plotter.n_total_imgs, args.img_size, args.img_size)
+
+            if reconstructed_x.shape[1] == 3:
+                reconstructed_x = reconstructed_x.reshape(plotter.n_total_imgs, args.channels, args.img_size, args.img_size)
+            else:
+                reconstructed_x = reconstructed_x.reshape(plotter.n_total_imgs, args.img_size, args.img_size)
             plotter.save_images(x.cpu().data, name="/x_epoch_%02d" %(epoch) + ".jpg")
             plotter.save_images(reconstructed_x.cpu().data, name="/reconstructed_x_epoch_%02d" %(epoch) + ".jpg")
         break
@@ -92,7 +97,10 @@ def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_l
     decoder.eval()
     with torch.no_grad():
         pseudo_samples = decoder(torch.cat([z,Variable(Tensor(z_id_one_hot))],1))
-        pseudo_samples = pseudo_samples.reshape(plotter.n_total_imgs, args.img_size, args.img_size)
+        if reconstructed_x.shape[1] == 3:
+            pseudo_samples = pseudo_samples.reshape(plotter.n_total_imgs, args.channels, args.img_size, args.img_size)
+        else:
+            pseudo_samples = pseudo_samples.reshape(plotter.n_total_imgs, args.img_size, args.img_size)
         plotter.save_images(pseudo_samples.cpu().data, name="/pseudo_sample_epoch_%02d" % (epoch) + ".jpg")
 
 def get_categorical(labels, n_classes=10):
@@ -153,6 +161,7 @@ def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_l
             encoder.zero_grad()
             decoder.zero_grad()
             classifer.zero_grad()
+
             y_onehot = get_categorical(target, args.n_classes).to(device)
             encoded_imgs,z_mu,z_var = encoder(data)
             decoded_imgs = decoder(torch.cat([encoded_imgs, y_onehot], dim=1))
@@ -171,6 +180,7 @@ def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_l
             z_representation,_,_ = encoder(data)
             # the classifier includes the specific module
             outputs = classifer(data.view(data.shape[0], -1), z_representation.detach())
+            #breakpoint()
             c_loss = classification_loss(outputs, target)
             c_loss.backward()
             optimizer_C.step()
@@ -206,7 +216,7 @@ def main(args):
     num_tasks = len(task_labels)
     n_classes = args.n_classes
     num_replayed = [5000, 5000, 5000, 5000]
-    train_dataset,test_dataset = data_utils.task_construction(task_labels)
+    train_dataset,test_dataset = data_utils.task_construction(task_labels, args.dataset)
     
     ## MODEL ##
     # Initialize encoder, decoder, specific, and classifier
@@ -234,12 +244,27 @@ def main(args):
         if task_id>0:            
             # generate pseudo-samples of previous tasks
             gen_x,gen_y = generate_pseudo_samples(device, task_id, args.latent_dim, task_labels, decoder, num_replayed)
-            gen_x = gen_x.reshape([gen_x.shape[0],img_shape[1],img_shape[2]])
+
+            if gen_x.shape[1] == 3:
+                gen_x = gen_x.reshape([gen_x.shape[0], img_shape[0], img_shape[1],img_shape[2]])
+            else:
+                gen_x = gen_x.reshape([gen_x.shape[0],img_shape[1],img_shape[2]])
             train_dataset[task_id-1].data = (gen_x*255).type(torch.uint8)
             train_dataset[task_id-1].targets = Variable(Tensor(gen_y)).type(torch.long)
             # concatenate the pseduo samples of previous tasks with the data of the current task
-            train_dataset[task_id].data = torch.cat((train_dataset[task_id].data,train_dataset[task_id-1].data.cpu()))
-            train_dataset[task_id].targets =  torch.cat((train_dataset[task_id].targets, train_dataset[task_id-1].targets.cpu()))
+            
+            if type(train_dataset[task_id-1].data) == torch.Tensor and type(train_dataset[task_id].data) == np.ndarray:
+                train_dataset[task_id-1].data = train_dataset[task_id-1].data.numpy()
+                train_dataset[task_id-1].targets = train_dataset[task_id-1].targets.numpy()
+                
+                if args.dataset == 'CIFAR10':  # workaround, idk why this is needed
+                    train_dataset[task_id-1].data = train_dataset[task_id-1].data.swapaxes(1,3)
+
+                train_dataset[task_id].data = np.concatenate((train_dataset[task_id].data,train_dataset[task_id-1].data))
+                train_dataset[task_id].targets =  np.concatenate((train_dataset[task_id].targets, train_dataset[task_id-1].targets))
+            else:
+                train_dataset[task_id].data = torch.cat((train_dataset[task_id].data,train_dataset[task_id-1].data.cpu()))
+                train_dataset[task_id].targets =  torch.cat((train_dataset[task_id].targets, train_dataset[task_id-1].targets.cpu()))
 
         train_loader = data_utils.get_train_loader(train_dataset[task_id], args.batch_size)
         test_loader = data_utils.get_test_loader(test_dataset[task_id], args.test_batch_size)
