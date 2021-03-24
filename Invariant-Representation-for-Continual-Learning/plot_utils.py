@@ -27,7 +27,7 @@ class plot_samples():
             c, h, w = images.shape[1], images.shape[2], images.shape[3]
             img = np.zeros((h * size[0], w * size[1], c))
         else:
-            h, w = images.shape[1], images.shape[2]
+            h, w = images.shape[2], images.shape[3]
             img = np.zeros((h * size[0], w * size[1]))
 
         for idx, image in enumerate(images):
@@ -38,7 +38,7 @@ class plot_samples():
             image_ = np.array(image_.resize((w, h), Image.BICUBIC))
 
             img[j*h:j*h+h, i*w:i*w+w] = image_
-                   
+        
         return img
 
 def isRGB(image):
