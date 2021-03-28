@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+import svhn
 import copy
 
 # Fix for Downloading MNIST giving HTTP Error 403:
@@ -36,6 +37,8 @@ def load_data(dataset):
     if dataset == "MNIST":
         full_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
         test_dataset = datasets.MNIST('./data', train=False, transform=transform)
+        # full_dataset.data = torch.unsqueeze(full_dataset.data, 1)
+        # test_dataset.data = torch.unsqueeze(test_dataset.data, 1)
     elif dataset == "EMNIST":
         full_dataset = datasets.EMNIST('./data', split="mnist", train=True, download=True, transform=transform)
         test_dataset = datasets.EMNIST('./data', split="mnist", train=False, transform=transform)
@@ -50,8 +53,10 @@ def load_data(dataset):
         full_dataset.targets = torch.Tensor(full_dataset.targets).type(torch.int64)
         test_dataset.targets = torch.Tensor(test_dataset.targets).type(torch.int64)
     elif dataset == "SVHN":
-        full_dataset = datasets.SVHN('./data', split='train', download=True, transform=transform)
-        test_dataset = datasets.SVHN('./data', split='test', download=True, transform=transform)
+        full_dataset = svhn.SVHN('./data', split='train', download=True, transform=transform)
+        test_dataset = svhn.SVHN('./data', split='test', download=True, transform=transform)
+        #full_dataset.data = full_dataset.data.swapaxes(1, 3)
+        #test_dataset.data = test_dataset.data.swapaxes(1, 3)
         full_dataset.targets = full_dataset.labels
         test_dataset.targets = test_dataset.labels
     else:

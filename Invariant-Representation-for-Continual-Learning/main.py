@@ -208,7 +208,7 @@ def main(args):
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
     print("used device: " + str(device))
-     
+
     ## DATA ##
     # Load data and construct the tasks 
     img_shape = (args.channels, args.img_size, args.img_size)
@@ -230,7 +230,7 @@ def main(args):
 
     ## OPTIMIZERS ##
     optimizer_cvae = torch.optim.Adam(itertools.chain(encoder.parameters(), decoder.parameters()), lr=args.learn_rate)
-    optimizer_C = torch.optim.Adam(classifier.parameters(), lr=args.learn_rate/50)
+    optimizer_C = torch.optim.Adam(classifier.parameters(), lr=args.learn_rate)
 
     test_loaders = []
     acc_of_task_t_at_time_t = [] # acc of each task at the end of learning it
@@ -246,19 +246,20 @@ def main(args):
             gen_x,gen_y = generate_pseudo_samples(device, task_id, args.latent_dim, task_labels, decoder, num_replayed)
 
             if gen_x.shape[1] == 3:
-                gen_x = gen_x.reshape([gen_x.shape[0], img_shape[0], img_shape[1],img_shape[2]])
+                gen_x = gen_x.reshape([gen_x.shape[0], img_shape[1],img_shape[2], img_shape[0]])
             else:
-                gen_x = gen_x.reshape([gen_x.shape[0],img_shape[1],img_shape[2]])
+                gen_x = gen_x.reshape([gen_x.shape[0], img_shape[1],img_shape[2]])
+
             train_dataset[task_id-1].data = (gen_x*255).type(torch.uint8)
             train_dataset[task_id-1].targets = Variable(Tensor(gen_y)).type(torch.long)
             # concatenate the pseduo samples of previous tasks with the data of the current task
             
             if type(train_dataset[task_id-1].data) == torch.Tensor and type(train_dataset[task_id].data) == np.ndarray:
-                train_dataset[task_id-1].data = train_dataset[task_id-1].data.numpy()
-                train_dataset[task_id-1].targets = train_dataset[task_id-1].targets.numpy()
+                train_dataset[task_id-1].data = train_dataset[task_id-1].data.to('cpu').numpy()
+                train_dataset[task_id-1].targets = train_dataset[task_id-1].targets.to('cpu').numpy()
                 
-                if args.dataset == 'CIFAR10':  # workaround, idk why this is needed
-                    train_dataset[task_id-1].data = train_dataset[task_id-1].data.swapaxes(1,3)
+                # if args.dataset == 'CIFAR10':  # workaround, idk why this is needed
+                #    train_dataset[task_id-1].data = train_dataset[task_id-1].data.swapaxes(1,3)
 
                 train_dataset[task_id].data = np.concatenate((train_dataset[task_id].data,train_dataset[task_id-1].data))
                 train_dataset[task_id].targets =  np.concatenate((train_dataset[task_id].targets, train_dataset[task_id-1].targets))
