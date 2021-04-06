@@ -70,10 +70,10 @@ class MNIST_RGB(datasets.MNIST):
     def __init__(self, path, train=True, download=True, transform=None, background_data=None):
         super().__init__(path, train=train, download=download, transform=transform)
         breakpoint()
-        background_data = torch.Tensor(background_data)
+        background_data = torch.Tensor(background_data).permute(0,3,1,2)
         self.data = self.data.unsqueeze(1).repeat(1, 3, 1, 1)
         tmp = background_data[0] * self.data[0]
-        tmp = tmp/255
+        tmp = tmp/2
         breakpoint()
 
 def load_data(dataset):
