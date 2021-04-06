@@ -18,6 +18,10 @@ class plot_samples():
         self.img_w = img_w
         self.img_h = img_h
 
+    def get_images(self, images):
+        images = images.reshape(self.n_total_imgs, self.n_channels, self.img_h, self.img_w)
+        return self._merge(images, [self.n_img_y, self.n_img_x, self.n_channels])
+
     def save_images(self, images, name='result.jpg'):
         images = images.reshape(self.n_total_imgs, self.n_channels, self.img_h, self.img_w)
         imsave(self.DIR + "/"+name, self._merge(images, [self.n_img_y, self.n_img_x, self.n_channels]))

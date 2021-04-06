@@ -13,6 +13,9 @@ import glob
 import os
 import sys
 import itertools
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 
 from model import *
 import data_utils
@@ -27,6 +30,7 @@ def parse_args():
     parser.add_argument("--channels", type=int, default=1, help="dimensionality of the input channels")
     parser.add_argument("--n_classes", type=int, default=10, help="total number of classes")
     parser.add_argument("--dataset", type=str, default="MNIST", help="Options: MNIST, EMNIST, Fashion-MNIST, CIFAR10, SVHN")
+    parser.add_argument("--to_grayscale", type=bool, default=False, help="Whether or not to transform a RBG dataset into Grayscale")
 
     # architecture
     parser.add_argument("--latent_dim", type=int, default=32, help="dimensionality of the latent code")
@@ -68,7 +72,65 @@ def check_args(args):
         os.remove(f)
     return args
 
-def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_labels, device):
+def save_train_imgs(original, reconstructed, samples, task_id):
+    fig = plt.figure(figsize=(8, 16))#, tight_layout={'pad':0}, frameon=False)
+    plt.subplots_adjust(wspace=0.15, hspace=0.15)
+    ax = plt.subplot2grid((4,2), (0//2, 0%2))
+    ax.imshow(original, cmap='gray')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    plt.box(on=None)
+    ax.set_xlabel('Original')
+    ax = plt.subplot2grid((4,2), (1//2, 1%2)) 
+    ax.imshow(reconstructed, cmap='gray')
+    ax.set_xlabel('Reconstructed')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    plt.box(on=None)
+    ax = plt.subplot2grid((4,8), (2//2, 2), colspan=4)
+    ax.imshow(samples, cmap='gray')
+    ax.set_xlabel('Generated')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    plt.box(on=None)
+
+    plt.savefig(dpi=200,
+                fname='%s/imgs_task_%d.jpg' % (args.results_path, task_id),
+                bbox_inches='tight')
+    plt.close()
+
+def save_train_losses(losses, task_id):
+    fig = plt.figure(figsize=(8, 16))#, tight_layout={'pad':0}, frameon=False)
+    plt.subplots_adjust(wspace=0.3, hspace=0.3)
+
+    for idx, (k, v) in enumerate(losses.items()):
+        if idx != len(losses) - 1:
+            ax = plt.subplot2grid((4,2), (idx//2, idx%2)) 
+        else:
+            ax = plt.subplot2grid((4,8), (idx//2, 2), colspan=4)
+        ax.plot(list(range(args.num_epochs)), v)
+        #ax.set_xticks(list(np.arange(0, args.num_epochs, args.num_epochs//10)))
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.set_xlabel('Epochs')
+
+        if k == 'cvae':
+            ylabel = f'{k.upper()} Loss (Rec + KL)'
+        elif k == 'rec':
+            ylabel = f'{k.capitalize()} Loss'
+        elif k == 'kl':
+            ylabel = f'{k.upper()} Loss'
+        elif k == 'classifier':
+            ylabel = f'{k.capitalize()} Loss'
+        elif k == 'total':
+            ylabel = f'{k.capitalize()} Loss'
+
+        ax.set_ylabel(ylabel)
+
+    plt.savefig(dpi=300,
+                fname='%s/losses_task_%d.jpg' % (args.results_path, task_id),
+                bbox_inches='tight')
+
+def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_labels, device, task_id):
     plotter = plot_utils.plot_samples(args.results_path, args.n_img_x, args.n_img_y, args.img_size, args.img_size, args.channels)
     # plot samples of the reconstructed images from the first batch of the test set of the current task
     for test_batch_idx, (test_data, test_target) in enumerate(test_loader):  
@@ -82,12 +144,10 @@ def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_l
             z,_,_ = encoder(x)
             reconstructed_x = decoder(torch.cat([z, x_id_onehot], dim=1))
 
-            if reconstructed_x.shape[1] == 3:
-                reconstructed_x = reconstructed_x.reshape(plotter.n_total_imgs, args.channels, args.img_size, args.img_size)
-            else:
-                reconstructed_x = reconstructed_x.reshape(plotter.n_total_imgs, args.img_size, args.img_size)
-            plotter.save_images(x.cpu().data, name="/x_epoch_%02d" %(epoch) + ".jpg")
-            plotter.save_images(reconstructed_x.cpu().data, name="/reconstructed_x_epoch_%02d" %(epoch) + ".jpg")
+            x_img = plotter.get_images(x.cpu().data)
+            reconstructed_x_img = plotter.get_images(reconstructed_x.cpu().data)
+            #plotter.save_images(x.cpu().data, name="/x_epoch_task_%02d_%03d" %(task_id, epoch) + ".jpg")
+            #plotter.save_images(reconstructed_x.cpu().data, name="/reconstructed_x_task_%02d_epoch_%03d" %(task_id, epoch) + ".jpg")
         break
     
     #plot pseudo random samples from the previous learned tasks
@@ -96,20 +156,20 @@ def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_l
     z_id_one_hot = get_categorical(z_id, n_classes).to(device)
     decoder.eval()
     with torch.no_grad():
-        pseudo_samples = decoder(torch.cat([z,Variable(Tensor(z_id_one_hot))],1))
-        if reconstructed_x.shape[1] == 3:
-            pseudo_samples = pseudo_samples.reshape(plotter.n_total_imgs, args.channels, args.img_size, args.img_size)
-        else:
-            pseudo_samples = pseudo_samples.reshape(plotter.n_total_imgs, args.img_size, args.img_size)
-        plotter.save_images(pseudo_samples.cpu().data, name="/pseudo_sample_epoch_%02d" % (epoch) + ".jpg")
+        pseudo_samples = decoder(torch.cat([z,Variable(Tensor(z_id_one_hot))],dim=1))
+        pseudo_img = plotter.get_images(pseudo_samples.cpu().data)
+        #plotter.save_images(pseudo_samples.cpu().data, name="/pseudo_sample_task_%02d_epoch_%03d" % (task_id, epoch) + ".jpg")
 
-def get_categorical(labels, n_classes=10):
+    save_train_imgs(x_img, reconstructed_x_img, pseudo_img, task_id)
+
+
+def get_categorical(labels, n_classes):
     cat = np.array(labels.data.tolist())
     cat = np.eye(n_classes)[cat].astype('float32')
     cat = torch.from_numpy(cat)
     return Variable(cat)
 
-def generate_pseudo_samples(device, task_id, latent_dim, curr_task_labels, decoder, replay_count, n_classes=10):
+def generate_pseudo_samples(device, task_id, latent_dim, curr_task_labels, decoder, replay_count, n_classes):
     gen_count = sum(replay_count[0:task_id])
     z = Variable(Tensor(np.random.normal(0, 1, (gen_count, latent_dim))))    
     # this can be used if we want to replay different number of samples for each task
@@ -123,10 +183,10 @@ def generate_pseudo_samples(device, task_id, latent_dim, curr_task_labels, decod
     x_id_one_hot = get_categorical(x_id_, n_classes).to(device)
     decoder.eval()
     with torch.no_grad():
-        x = decoder(torch.cat([z,Variable(Tensor(x_id_one_hot))], 1))
+        x = decoder(torch.cat([z,Variable(Tensor(x_id_one_hot))], dim=1))
     return x, x_id_
 
-def evaluate(encoder, classifier, task_id, device, task_test_loader):
+def evaluate(encoder, classifier, task_id, device, task_test_loader, write_file=False):
     correct_class = 0    
     n = 0
     classifier.eval()
@@ -140,10 +200,26 @@ def evaluate(encoder, classifier, task_id, device, task_test_loader):
             pred_class = model_output.argmax(dim=1, keepdim=True)
             correct_class += pred_class.eq(target.view_as(pred_class)).sum().item()
 
+    if write_file:
+        with open(f'{args.results_path}/log.txt', 'a+') as writer:
+            print('Test evaluation of task_id: {} ACC: {}/{} ({:.3f}%)'.format(
+            task_id, correct_class, n, 100*correct_class/float(n)), file=writer)
+
     print('Test evaluation of task_id: {} ACC: {}/{} ({:.3f}%)'.format(
          task_id, correct_class, n, 100*correct_class/float(n)))  
 
     return 100. * correct_class / float(n)
+
+class LossesOverTime():
+    def __init__(self):
+        self.cvae = []
+        self.rec = []
+        self.kl = []
+        self.classifier = []
+        self.total = []
+
+    def plot(self):
+        plt.figure
 
 def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_loader, test_loader, curr_task_labels, task_id, device):
     ## loss ##
@@ -152,7 +228,23 @@ def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_l
     encoder.train()
     decoder.train()
     classifer.train()
+    losses_over_time = {'cvae': [],
+                        'rec': [],
+                        'kl': [],
+                        'classifier': [],
+                        'total': []}
+
+    cvae_loss_over_epochs = []
+    rec_loss_over_epochs = []
+    kl_loss_over_epochs = []
+    classifier_loss_over_epochs = []
+    total_loss_over_epochs = []
     for epoch in range(args.num_epochs):
+        losses = {'cvae': 0,
+                  'rec': 0,
+                  'kl': 0,
+                  'classifier': 0,
+                  'total': 0}
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device) 
             #---------------------------#
@@ -186,15 +278,29 @@ def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_l
             optimizer_C.step()
 
             total_loss = cvae_loss.item() + c_loss.item()
+            
             if batch_idx % args.log_interval == 0:
                 print('Train Epoch: {} [{}/{} ({:.0f}%)]\tTotal loss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), total_loss)) 
-                print("epoch %d: total_loss %03.2f cvae_loss %03.2f rec_loss %03.2f kl_loss %03.2f c_loss %03.2f" % (epoch, total_loss, cvae_loss.item(), rec_loss.item()/len(data), kl_loss.item(),c_loss.item()))
-            
-        if  epoch%2==0 or epoch+1 == args.num_epochs:
-           test_acc = evaluate(encoder, classifer, task_id, device, test_loader)
-           visualize(args, test_loader, encoder, decoder, epoch, args.n_classes, curr_task_labels, device)
+                print("epoch %d: total_loss %03.2f cvae_loss %03.2f rec_loss %03.2f kl_loss %03.2f c_loss %03.2f" % (epoch, total_loss, cvae_loss.item(), rec_loss.item(), kl_loss.item(),c_loss.item()))
+                losses['cvae'] = cvae_loss.item()
+                losses['rec'] = rec_loss.item()
+                losses['kl'] = kl_loss.item()
+                losses['classifier'] = c_loss.item()
+                losses['total'] = total_loss
+        
+        losses_over_time['cvae'].append(losses['cvae'])
+        losses_over_time['rec'].append(losses['rec'])
+        losses_over_time['kl'].append(losses['kl'])
+        losses_over_time['classifier'].append(losses['classifier'])
+        losses_over_time['total'].append(losses['total'])
+        
+        if epoch+1 == args.num_epochs:
+           test_acc = evaluate(encoder, classifer, task_id, device, test_loader, write_file=False)
+           visualize(args, test_loader, encoder, decoder, epoch, args.n_classes, curr_task_labels, device, task_id)
+    
+    save_train_losses(losses_over_time, task_id)
 
     return test_acc
 
@@ -212,13 +318,18 @@ def main(args):
     ## DATA ##
     # Load data and construct the tasks 
     img_shape = (args.channels, args.img_size, args.img_size)
-    task_labels = [[0,1],[2,3],[4,5],[6,7],[8,9]]
+
+    task_labels = [[x, y] for x, y in zip(range(0, args.n_classes, 2), range(1, args.n_classes, 2))]
+    if not args.n_classes % 2 == 0:
+        task_labels.append([args.n_classes - 1])
+
+    #task_labels = [[0,1],[2,3],[4,5],[6,7],[8,9]]
     num_tasks = len(task_labels)
     n_classes = args.n_classes
-    num_replayed = [5000, 5000, 5000, 5000]
+    num_replayed = [5000] * num_tasks
     train_dataset,test_dataset = data_utils.task_construction(task_labels, args.dataset)
     
-    ## MODEL ##
+    ## MODEL ## 
     # Initialize encoder, decoder, specific, and classifier
     encoder = Encoder(img_shape, args.n_hidden_cvae, args.latent_dim)
     decoder = Decoder(img_shape, args.n_hidden_cvae, args.latent_dim, n_classes, use_label=True)
@@ -230,7 +341,7 @@ def main(args):
 
     ## OPTIMIZERS ##
     optimizer_cvae = torch.optim.Adam(itertools.chain(encoder.parameters(), decoder.parameters()), lr=args.learn_rate)
-    optimizer_C = torch.optim.Adam(classifier.parameters(), lr=args.learn_rate)
+    optimizer_C = torch.optim.Adam(classifier.parameters(), lr=args.learn_rate/50)
 
     test_loaders = []
     acc_of_task_t_at_time_t = [] # acc of each task at the end of learning it
@@ -238,12 +349,13 @@ def main(args):
     #------------------------------------------------------------------------------------------#
     #----- Train the sequence of CL tasks -----#
     #----------------------------------------------------------------------#
+
     for task_id in range(num_tasks):
         print("Strat training task#" + str(task_id))
         sys.stdout.flush()
         if task_id>0:            
             # generate pseudo-samples of previous tasks
-            gen_x,gen_y = generate_pseudo_samples(device, task_id, args.latent_dim, task_labels, decoder, num_replayed)
+            gen_x,gen_y = generate_pseudo_samples(device, task_id, args.latent_dim, task_labels, decoder, num_replayed, args.n_classes)
 
             if gen_x.shape[1] == 3:
                 gen_x = gen_x.reshape([gen_x.shape[0], img_shape[1],img_shape[2], img_shape[0]])
@@ -258,9 +370,6 @@ def main(args):
                 train_dataset[task_id-1].data = train_dataset[task_id-1].data.to('cpu').numpy()
                 train_dataset[task_id-1].targets = train_dataset[task_id-1].targets.to('cpu').numpy()
                 
-                # if args.dataset == 'CIFAR10':  # workaround, idk why this is needed
-                #    train_dataset[task_id-1].data = train_dataset[task_id-1].data.swapaxes(1,3)
-
                 train_dataset[task_id].data = np.concatenate((train_dataset[task_id].data,train_dataset[task_id-1].data))
                 train_dataset[task_id].targets =  np.concatenate((train_dataset[task_id].targets, train_dataset[task_id-1].targets))
             else:
@@ -281,11 +390,15 @@ def main(args):
     ACC = 0
     BWT = 0
     for task_id in range(num_tasks):
-        task_acc = evaluate(encoder, classifier, task_id, device, test_loaders[task_id])
+        task_acc = evaluate(encoder, classifier, task_id, device, test_loaders[task_id], write_file=True)
         ACC += task_acc
         BWT += (task_acc - acc_of_task_t_at_time_t[task_id])
     ACC = ACC/len(task_labels)
     BWT = BWT/len(task_labels)-1
+    with open(f'{args.results_path}/log.txt', 'a+') as writer:
+        print('Average accuracy in task agnostic inference (ACC):  {:.3f}'.format(ACC), file=writer)
+        print('Average backward transfer (BWT): {:.3f}'.format(BWT), file=writer)
+
     print('Average accuracy in task agnostic inference (ACC):  {:.3f}'.format(ACC))
     print('Average backward transfer (BWT): {:.3f}'.format(BWT))
 
