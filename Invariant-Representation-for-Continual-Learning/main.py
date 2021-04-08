@@ -272,7 +272,6 @@ def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_l
             z_representation,_,_ = encoder(data)
             # the classifier includes the specific module
             outputs = classifer(data.view(data.shape[0], -1), z_representation.detach())
-            #breakpoint()
             c_loss = classification_loss(outputs, target)
             c_loss.backward()
             optimizer_C.step()

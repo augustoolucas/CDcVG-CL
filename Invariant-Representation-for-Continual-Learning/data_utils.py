@@ -29,7 +29,7 @@ def get_test_loader(test_dataset,test_batch_size):
     test_loader = DataLoader(
         test_dataset,
         test_batch_size,
-        shuffle=False,
+        shuffle=True,
         num_workers=0,
         pin_memory=True)
     return test_loader
@@ -78,22 +78,23 @@ class MNIST_RGB(datasets.MNIST):
 
 def load_data(dataset):
     transform = transforms.Compose([transforms.ToTensor()])
+
     if dataset == "MNIST":
         full_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
         test_dataset = datasets.MNIST('./data', train=False, transform=transform)
-        breakpoint()
 
-    if dataset == "MNIST-RGB":
+    elif dataset == "MNIST-RGB":
         cifar = CIFAR10('./data', train=True, download=True, grayscale=False, res=28)
         full_dataset = MNIST_RGB('./data', train=True, download=True, transform=transform, background_data=cifar.data)
         test_dataset = MNIST_RGB('./data', train=False, transform=transform, background_data=cifar.data)
 
-        
     elif dataset == "EMNIST":
         full_dataset = datasets.EMNIST('./data', split="letters", train=True, download=True, transform=transform)
         test_dataset = datasets.EMNIST('./data', split="letters", train=False, transform=transform)
         full_dataset.data = torch.transpose(full_dataset.data, 1, 2)
+        full_dataset.targets = full_dataset.targets - 1  # labels starts from 1, setting it to start from 0
         test_dataset.data = torch.transpose(test_dataset.data, 1, 2)
+        test_dataset.targets = test_dataset.targets - 1  # labels starts from 1, setting it to start from 0
 
     elif dataset == "Fashion-MNIST":
         full_dataset = datasets.FashionMNIST('./data', train=True, download=True, transform=transform)
