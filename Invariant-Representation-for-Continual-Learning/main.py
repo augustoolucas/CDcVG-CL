@@ -73,22 +73,26 @@ def check_args(args):
     return args
 
 def save_train_imgs(original, reconstructed, samples, task_id):
+    cmap = 'gray' if args.channels == 1 else None
+    original = original.astype(np.uint8)
+    reconstructed = reconstructed.astype(np.uint8)
+    samples = samples.astype(np.uint8)
     fig = plt.figure(figsize=(8, 16))#, tight_layout={'pad':0}, frameon=False)
     plt.subplots_adjust(wspace=0.15, hspace=0.15)
     ax = plt.subplot2grid((4,2), (0//2, 0%2))
-    ax.imshow(original, cmap='gray')
+    ax.imshow(original, cmap=cmap)
     ax.set_xticks([])
     ax.set_yticks([])
     plt.box(on=None)
     ax.set_xlabel('Original')
     ax = plt.subplot2grid((4,2), (1//2, 1%2)) 
-    ax.imshow(reconstructed, cmap='gray')
+    ax.imshow(reconstructed, cmap=cmap)
     ax.set_xlabel('Reconstructed')
     ax.set_xticks([])
     ax.set_yticks([])
     plt.box(on=None)
     ax = plt.subplot2grid((4,8), (2//2, 2), colspan=4)
-    ax.imshow(samples, cmap='gray')
+    ax.imshow(samples, cmap=cmap)
     ax.set_xlabel('Generated')
     ax.set_xticks([])
     ax.set_yticks([])
@@ -388,10 +392,20 @@ def main(args):
     #----------------------------------------------------------------------#
     ACC = 0
     BWT = 0
+    test_accs = []
     for task_id in range(num_tasks):
         task_acc = evaluate(encoder, classifier, task_id, device, test_loaders[task_id], write_file=True)
+        test_accs.append(task_acc)
         ACC += task_acc
         BWT += (task_acc - acc_of_task_t_at_time_t[task_id])
+
+    plt.figure()
+    plt.plot(list(range(num_tasks)), test_accs)
+    plt.locator_params(axis='x', integer=True)
+    plt.xlabel('Task')
+    plt.ylabel('Accuracy')
+    plt.savefig(dpi=200, fname=f'{args.results_path}/acc_by_tasks.png')
+
     ACC = ACC/len(task_labels)
     BWT = BWT/len(task_labels)-1
     with open(f'{args.results_path}/log.txt', 'a+') as writer:

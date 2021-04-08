@@ -25,6 +25,7 @@ def get_train_loader(train_dataset,batch_size):
     pin_memory=True, shuffle=True)
     return train_loader
 
+
 def get_test_loader(test_dataset,test_batch_size):
     test_loader = DataLoader(
         test_dataset,
@@ -34,8 +35,9 @@ def get_test_loader(test_dataset,test_batch_size):
         pin_memory=True)
     return test_loader
 
+
 class CIFAR10(datasets.CIFAR10):
-    def __init__(self, path, train=True, download=True, grayscale=False, res=32):
+    def __init__(self, path, train=True, download=True, grayscale=True, res=32):
         super().__init__(path, train=train, download=download)
         aux = []
         for data in self.data:
@@ -66,15 +68,18 @@ class CIFAR10(datasets.CIFAR10):
         img = transforms.ToTensor()(img)    
         return img, target
 
+
 class MNIST_RGB(datasets.MNIST):
-    def __init__(self, path, train=True, download=True, transform=None, background_data=None):
-        super().__init__(path, train=train, download=download, transform=transform)
-        breakpoint()
-        background_data = torch.Tensor(background_data).permute(0,3,1,2)
-        self.data = self.data.unsqueeze(1).repeat(1, 3, 1, 1)
-        tmp = background_data[0] * self.data[0]
-        tmp = tmp/2
-        breakpoint()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.data = self.data.unsqueeze(3).repeat(1, 1, 1, 3)
+        
+    def __getitem__(self, idx):
+        img, target = self.data[idx], int(self.targets[idx])
+        img = Image.fromarray(img.numpy())
+        img = transforms.ToTensor()(img)
+        return img, target
+
 
 def load_data(dataset):
     transform = transforms.Compose([transforms.ToTensor()])
@@ -84,15 +89,15 @@ def load_data(dataset):
         test_dataset = datasets.MNIST('./data', train=False, transform=transform)
 
     elif dataset == "MNIST-RGB":
-        cifar = CIFAR10('./data', train=True, download=True, grayscale=False, res=28)
-        full_dataset = MNIST_RGB('./data', train=True, download=True, transform=transform, background_data=cifar.data)
-        test_dataset = MNIST_RGB('./data', train=False, transform=transform, background_data=cifar.data)
+        full_dataset = MNIST_RGB('./data', train=True, download=True, transform=transform)
+        test_dataset = MNIST_RGB('./data', train=False, transform=transform)
 
     elif dataset == "EMNIST":
         full_dataset = datasets.EMNIST('./data', split="letters", train=True, download=True, transform=transform)
-        test_dataset = datasets.EMNIST('./data', split="letters", train=False, transform=transform)
         full_dataset.data = torch.transpose(full_dataset.data, 1, 2)
         full_dataset.targets = full_dataset.targets - 1  # labels starts from 1, setting it to start from 0
+
+        test_dataset = datasets.EMNIST('./data', split="letters", train=False, transform=transform)
         test_dataset.data = torch.transpose(test_dataset.data, 1, 2)
         test_dataset.targets = test_dataset.targets - 1  # labels starts from 1, setting it to start from 0
 
@@ -101,15 +106,21 @@ def load_data(dataset):
         test_dataset = datasets.FashionMNIST('./data', train=False, transform=transform)
 
     elif dataset == "CIFAR10":
-        full_dataset = CIFAR10('./data', train=True, download=True, grayscale=True, res=28)
-        test_dataset = CIFAR10('./data', train=False, grayscale=True, res=28)
+        full_dataset = datasets.CIFAR10('./data', train=True, download=True, transform=transform)
+        full_dataset.targets = torch.Tensor(full_dataset.targets).type(torch.int64)
+
+        test_dataset = datasets.CIFAR10('./data', train=False, transform=transform)
+        test_dataset.targets = torch.Tensor(test_dataset.targets).type(torch.int64)
+
+    elif dataset == "CIFAR10-Grayscale":
+        full_dataset = CIFAR10('./data', train=True, download=True)
+        test_dataset = CIFAR10('./data', train=False, download=True)
        
     elif dataset == "SVHN":
         full_dataset = svhn.SVHN('./data', split='train', download=True, transform=transform)
-        test_dataset = svhn.SVHN('./data', split='test', download=True, transform=transform)
-        #full_dataset.data = full_dataset.data.swapaxes(1, 3)
-        #test_dataset.data = test_dataset.data.swapaxes(1, 3)
         full_dataset.targets = full_dataset.labels
+
+        test_dataset = svhn.SVHN('./data', split='test', download=True, transform=transform)
         test_dataset.targets = test_dataset.labels
 
     else:

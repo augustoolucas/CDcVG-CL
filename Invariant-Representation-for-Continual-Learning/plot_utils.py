@@ -4,7 +4,6 @@ from torchvision import transforms
 from imageio import imwrite
 from PIL import Image
 
-imsave = imwrite
 # this function is borrowed from https://github.com/hwalsuklee/tensorflow-mnist-AAE/blob/master/plot_utils.py
 class plot_samples():
     def __init__(self, DIR, n_img_x=8, n_img_y=8, img_w=28, img_h=28, n_channels=1):
@@ -24,7 +23,7 @@ class plot_samples():
 
     def save_images(self, images, name='result.jpg'):
         images = images.reshape(self.n_total_imgs, self.n_channels, self.img_h, self.img_w)
-        imsave(self.DIR + "/"+name, self._merge(images, [self.n_img_y, self.n_img_x, self.n_channels]))
+        imwrite(self.DIR + "/"+name, self._merge(images, [self.n_img_y, self.n_img_x, self.n_channels]))
 
     def _merge(self, images, size):
         if isRGB(images[0]):
