@@ -30,7 +30,6 @@ def parse_args():
     parser.add_argument("--channels", type=int, default=1, help="dimensionality of the input channels")
     parser.add_argument("--n_classes", type=int, default=10, help="total number of classes")
     parser.add_argument("--dataset", type=str, default="MNIST", help="Options: MNIST, EMNIST, Fashion-MNIST, CIFAR10, SVHN")
-    parser.add_argument("--to_grayscale", type=bool, default=False, help="Whether or not to transform a RBG dataset into Grayscale")
 
     # architecture
     parser.add_argument("--latent_dim", type=int, default=32, help="dimensionality of the latent code")
@@ -77,43 +76,36 @@ def save_train_imgs(original, reconstructed, samples, task_id):
     original = original.astype(np.uint8)
     reconstructed = reconstructed.astype(np.uint8)
     samples = samples.astype(np.uint8)
-    fig = plt.figure(figsize=(8, 16))#, tight_layout={'pad':0}, frameon=False)
-    plt.subplots_adjust(wspace=0.15, hspace=0.15)
-    ax = plt.subplot2grid((4,2), (0//2, 0%2))
-    ax.imshow(original, cmap=cmap)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    plt.box(on=None)
-    ax.set_xlabel('Original')
-    ax = plt.subplot2grid((4,2), (1//2, 1%2)) 
-    ax.imshow(reconstructed, cmap=cmap)
-    ax.set_xlabel('Reconstructed')
-    ax.set_xticks([])
-    ax.set_yticks([])
-    plt.box(on=None)
-    ax = plt.subplot2grid((4,8), (2//2, 2), colspan=4)
-    ax.imshow(samples, cmap=cmap)
-    ax.set_xlabel('Generated')
-    ax.set_xticks([])
-    ax.set_yticks([])
-    plt.box(on=None)
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
+    ax1.imshow(original, cmap=cmap)
+    ax1.set_xticks([])
+    ax1.set_yticks([])
+    ax1.set_xlabel('Original')
+    ax2.imshow(reconstructed, cmap=cmap)
+    ax2.set_xlabel('Reconstructed')
+    ax2.set_xticks([])
+    ax2.set_yticks([])
+    ax3.imshow(samples, cmap=cmap)
+    ax3.set_xlabel('Generated')
+    ax3.set_xticks([])
+    ax3.set_yticks([])
 
-    plt.savefig(dpi=200,
+    plt.savefig(dpi=300,
                 fname='%s/imgs_task_%d.jpg' % (args.results_path, task_id),
                 bbox_inches='tight')
     plt.close()
 
+
 def save_train_losses(losses, task_id):
-    fig = plt.figure(figsize=(8, 16))#, tight_layout={'pad':0}, frameon=False)
+    fig = plt.figure(figsize=(20, 8))#, tight_layout={'pad':0}, frameon=False)
     plt.subplots_adjust(wspace=0.3, hspace=0.3)
 
     for idx, (k, v) in enumerate(losses.items()):
         if idx != len(losses) - 1:
-            ax = plt.subplot2grid((4,2), (idx//2, idx%2)) 
+            ax = plt.subplot2grid(shape=(2, 4), loc=(idx%2, idx//2)) 
         else:
-            ax = plt.subplot2grid((4,8), (idx//2, 2), colspan=4)
+            ax = plt.subplot2grid(shape=(7, 4), loc=(2, idx//2), rowspan=3)
         ax.plot(list(range(args.num_epochs)), v)
-        #ax.set_xticks(list(np.arange(0, args.num_epochs, args.num_epochs//10)))
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         ax.set_xlabel('Epochs')
 
@@ -133,6 +125,7 @@ def save_train_losses(losses, task_id):
     plt.savefig(dpi=300,
                 fname='%s/losses_task_%d.jpg' % (args.results_path, task_id),
                 bbox_inches='tight')
+    
 
 def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_labels, device, task_id):
     plotter = plot_utils.plot_samples(args.results_path, args.n_img_x, args.n_img_y, args.img_size, args.img_size, args.channels)
@@ -214,16 +207,6 @@ def evaluate(encoder, classifier, task_id, device, task_test_loader, write_file=
 
     return 100. * correct_class / float(n)
 
-class LossesOverTime():
-    def __init__(self):
-        self.cvae = []
-        self.rec = []
-        self.kl = []
-        self.classifier = []
-        self.total = []
-
-    def plot(self):
-        plt.figure
 
 def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_loader, test_loader, curr_task_labels, task_id, device):
     ## loss ##
@@ -244,6 +227,7 @@ def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_l
     classifier_loss_over_epochs = []
     total_loss_over_epochs = []
     for epoch in range(args.num_epochs):
+        print(f'Epoch: {epoch}')
         losses = {'cvae': 0,
                   'rec': 0,
                   'kl': 0,
@@ -283,10 +267,11 @@ def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_l
             total_loss = cvae_loss.item() + c_loss.item()
             
             if batch_idx % args.log_interval == 0:
-                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tTotal loss: {:.6f}'.format(
+                """print('Train Epoch: {} [{}/{} ({:.0f}%)]\tTotal loss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader)*args.batch_size,
                 100. * batch_idx / len(train_loader), total_loss)) 
                 print("epoch %d: total_loss %03.2f cvae_loss %03.2f rec_loss %03.2f kl_loss %03.2f c_loss %03.2f" % (epoch, total_loss, cvae_loss.item(), rec_loss.item(), kl_loss.item(),c_loss.item()))
+                """
                 losses['cvae'] = cvae_loss.item()
                 losses['rec'] = rec_loss.item()
                 losses['kl'] = kl_loss.item()
@@ -393,6 +378,19 @@ def main(args):
     ACC = 0
     BWT = 0
     test_accs = []
+
+    with open(f'{args.results_path}/log.txt', 'a+') as writer:
+        print(f'Img Size: {args.img_size}', file=writer)
+        print(f'Channels: {args.channels}', file=writer)
+        print(f'Classes: {args.n_classes}', file=writer)
+        print(f'Dataset: {args.dataset}', file=writer)
+        print(f'Epochs: {args.num_epochs}', file=writer)
+        print(f'Learning rate: {args.learn_rate}', file=writer)
+        print(f'Batch Size: {args.batch_size}', file=writer)
+        print(f'Hidden Units CVAE: {args.n_hidden_cvae}', file=writer)
+        print(f'Hidden Units Specific: {args.n_hidden_specific}', file=writer)
+        print(f'Hidden Units Classifier: {args.n_hidden_classifier}', file=writer)
+        print('', file=writer)
     for task_id in range(num_tasks):
         task_acc = evaluate(encoder, classifier, task_id, device, test_loaders[task_id], write_file=True)
         test_accs.append(task_acc)
@@ -400,7 +398,7 @@ def main(args):
         BWT += (task_acc - acc_of_task_t_at_time_t[task_id])
 
     plt.figure()
-    plt.plot(list(range(num_tasks)), test_accs)
+    plt.plot(list(range(num_tasks)), test_accs, marker='o')
     plt.locator_params(axis='x', integer=True)
     plt.xlabel('Task')
     plt.ylabel('Accuracy')
