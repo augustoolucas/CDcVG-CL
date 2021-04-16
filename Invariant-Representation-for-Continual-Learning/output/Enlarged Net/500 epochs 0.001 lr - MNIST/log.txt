@@ -1,0 +1,7 @@
+Test evaluation of task_id: 0 ACC: 1545/2115 (73.050%)
+Test evaluation of task_id: 1 ACC: 1554/2042 (76.102%)
+Test evaluation of task_id: 2 ACC: 1535/1874 (81.910%)
+Test evaluation of task_id: 3 ACC: 1843/1986 (92.800%)
+Test evaluation of task_id: 4 ACC: 1923/1983 (96.974%)
+Average accuracy in task agnostic inference (ACC):  84.167
+Average backward transfer (BWT): -15.429
