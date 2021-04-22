@@ -1,0 +1,18 @@
+Img Size: 28
+Channels: 1
+Classes: 10
+Dataset: Fashion-MNIST
+Epochs: 250
+Learning rate: 0.001
+Batch Size: 128
+Hidden Units CVAE: 300
+Hidden Units Specific: 20
+Hidden Units Classifier: 40
+
+Test evaluation of task_id: 0 ACC: 1240/2000 (62.000%)
+Test evaluation of task_id: 1 ACC: 1032/2000 (51.600%)
+Test evaluation of task_id: 2 ACC: 1433/2000 (71.650%)
+Test evaluation of task_id: 3 ACC: 1450/2000 (72.500%)
+Test evaluation of task_id: 4 ACC: 1960/2000 (98.000%)
+Average accuracy in task agnostic inference (ACC):  71.150
+Average backward transfer (BWT): -26.920

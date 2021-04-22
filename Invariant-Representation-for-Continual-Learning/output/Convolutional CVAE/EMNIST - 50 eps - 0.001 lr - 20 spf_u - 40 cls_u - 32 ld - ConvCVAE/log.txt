@@ -1,0 +1,26 @@
+Img Size: 28
+Channels: 1
+Classes: 26
+Dataset: EMNIST
+Epochs: 50
+Learning rate: 0.001
+Batch Size: 128
+Hidden Units CVAE: 300
+Hidden Units Specific: 20
+Hidden Units Classifier: 40
+
+Test evaluation of task_id: 0 ACC: 705/1710 (41.228%)
+Test evaluation of task_id: 1 ACC: 1162/2518 (46.148%)
+Test evaluation of task_id: 2 ACC: 1052/2291 (45.919%)
+Test evaluation of task_id: 3 ACC: 484/968 (50.000%)
+Test evaluation of task_id: 4 ACC: 1859/2674 (69.521%)
+Test evaluation of task_id: 5 ACC: 812/1192 (68.121%)
+Test evaluation of task_id: 6 ACC: 2138/2836 (75.388%)
+Test evaluation of task_id: 7 ACC: 4306/5553 (77.544%)
+Test evaluation of task_id: 8 ACC: 815/1222 (66.694%)
+Test evaluation of task_id: 9 ACC: 4113/5084 (80.901%)
+Test evaluation of task_id: 10 ACC: 2125/2798 (75.947%)
+Test evaluation of task_id: 11 ACC: 776/1238 (62.682%)
+Test evaluation of task_id: 12 ACC: 0/1262 (0.000%)
+Average accuracy in task agnostic inference (ACC):  58.469
+Average backward transfer (BWT): -23.562
