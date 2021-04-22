@@ -93,13 +93,25 @@ def load_data(dataset):
         test_dataset = MNIST_RGB('./data', train=False, transform=transform)
 
     elif dataset == "EMNIST":
-        full_dataset = datasets.EMNIST('./data', split="letters", train=True, download=True, transform=transform)
+        full_dataset = datasets.EMNIST('./data', split="byclass", train=True, download=True, transform=transform)
         full_dataset.data = torch.transpose(full_dataset.data, 1, 2)
         full_dataset.targets = full_dataset.targets - 1  # labels starts from 1, setting it to start from 0
 
-        test_dataset = datasets.EMNIST('./data', split="letters", train=False, transform=transform)
+        full_dataset.data = full_dataset.data[full_dataset.targets > 8]
+        full_dataset.targets = full_dataset.targets[full_dataset.targets > 8]
+        full_dataset.data = full_dataset.data[full_dataset.targets < 35]
+        full_dataset.targets = full_dataset.targets[full_dataset.targets < 35]
+        full_dataset.targets = full_dataset.targets - 9  # labels starts from 1, setting it to start from 0
+
+        test_dataset = datasets.EMNIST('./data', split="byclass", train=False, transform=transform)
         test_dataset.data = torch.transpose(test_dataset.data, 1, 2)
         test_dataset.targets = test_dataset.targets - 1  # labels starts from 1, setting it to start from 0
+
+        test_dataset.data = test_dataset.data[test_dataset.targets > 8]
+        test_dataset.targets = test_dataset.targets[test_dataset.targets > 8]
+        test_dataset.data = test_dataset.data[test_dataset.targets < 35]
+        test_dataset.targets = test_dataset.targets[test_dataset.targets < 35]
+        test_dataset.targets = test_dataset.targets - 9  # labels starts from 1, setting it to start from 0
 
     elif dataset == "Fashion-MNIST":
         full_dataset = datasets.FashionMNIST('./data', train=True, download=True, transform=transform)
@@ -112,7 +124,7 @@ def load_data(dataset):
         test_dataset = datasets.CIFAR10('./data', train=False, transform=transform)
         test_dataset.targets = torch.Tensor(test_dataset.targets).type(torch.int64)
 
-    elif dataset == "CIFAR10-Grayscale":
+    elif dataset == "CIFAR10-Gray":
         full_dataset = CIFAR10('./data', train=True, download=True)
         test_dataset = CIFAR10('./data', train=False, download=True)
        
