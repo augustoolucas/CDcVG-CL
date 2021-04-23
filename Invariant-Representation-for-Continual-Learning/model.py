@@ -155,7 +155,7 @@ class Decoder(nn.Module):
                  latent_dim,
                  n_classes,
                  use_label=True,
-                 enlarged=False):
+                 n_hidden_layers=1):
         super(Decoder, self).__init__()
         # conditional generation
         if use_label:
@@ -163,19 +163,21 @@ class Decoder(nn.Module):
         else:
             input_dim = latent_dim
 
-        if enlarged:
-            self.model = nn.Sequential(nn.Linear(input_dim, int(n_hidden//2)),
-                                       nn.BatchNorm1d(int(n_hidden//2)),
-                                       nn.Linear(int(n_hidden//2), n_hidden))
-        else:
-            self.model = nn.Sequential(nn.Linear(input_dim, n_hidden))
+        self.model = nn.Sequential()
 
-        common_modules = nn.Sequential(nn.BatchNorm1d(n_hidden),
-                                       nn.ReLU (inplace=True),
-                                       nn.Linear(n_hidden, int(np.prod(img_shape))),
-                                       nn.Sigmoid())
+        for hl in range(1, n_hidden_layers+1):
+            output_dim = int(n_hidden//2**(n_hidden_layers-hl))
+            new_module = nn.Sequential(nn.Linear(input_dim, output_dim),
+                                       nn.BatchNorm1d(output_dim),
+                                       nn.ReLU(inplace=True))
+            self.model.add_module(f'layer_{hl}', new_module)
 
-        self.model.add_module('common_modules', common_modules)
+            input_dim = output_dim
+
+        output_layer = nn.Sequential(nn.Linear(input_dim, int(np.prod(img_shape))),
+                                     nn.Sigmoid())
+
+        self.model.add_module('output_layer', output_layer)
 
         self.img_shape = img_shape
 
