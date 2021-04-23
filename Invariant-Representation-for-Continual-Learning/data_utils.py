@@ -125,8 +125,8 @@ def load_data(dataset):
         test_dataset.targets = torch.Tensor(test_dataset.targets).type(torch.int64)
 
     elif dataset == "CIFAR10-Gray":
-        full_dataset = CIFAR10('./data', train=True, download=True)
-        test_dataset = CIFAR10('./data', train=False, download=True)
+        full_dataset = CIFAR10('./data', train=True, download=True, res=28)
+        test_dataset = CIFAR10('./data', train=False, download=True, res=28)
        
     elif dataset == "SVHN":
         full_dataset = svhn.SVHN('./data', split='train', download=True, transform=transform)
@@ -136,7 +136,7 @@ def load_data(dataset):
         test_dataset.targets = test_dataset.labels
 
     else:
-        print("Invalid Dataset")
+        print(f'Invalid Dataset: {dataset}')
         exit()
 
     return full_dataset,test_dataset
