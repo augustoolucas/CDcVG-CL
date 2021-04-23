@@ -15,7 +15,10 @@ import sys
 import itertools
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
+import torch.nn as nn
 from matplotlib.ticker import MaxNLocator
+#from torch.autograd import Variable
 
 from model import *
 import data_utils
@@ -26,6 +29,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description=desc)
 
     # data
+    parser.add_argument('--cvae_model', type=str, default='mlp', help='Autoencoder Model: MLP, MLP-Enlarged or ConvNet')
+    parser.add_argument('--specific_model', type=str, default='mlp', help='Autoencoder Model: MLP, MLP-Enlarged or ConvNet')
     parser.add_argument("--img_size", type=int, default=28, help="dimensionality of the input image")
     parser.add_argument("--channels", type=int, default=1, help="dimensionality of the input channels")
     parser.add_argument("--n_classes", type=int, default=10, help="total number of classes")
@@ -78,17 +83,19 @@ def save_train_imgs(original, reconstructed, samples, task_id):
     samples = samples.astype(np.uint8)
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
     ax1.imshow(original, cmap=cmap)
-    ax1.set_xticks([])
-    ax1.set_yticks([])
     ax1.set_xlabel('Original')
     ax2.imshow(reconstructed, cmap=cmap)
     ax2.set_xlabel('Reconstructed')
-    ax2.set_xticks([])
-    ax2.set_yticks([])
     ax3.imshow(samples, cmap=cmap)
     ax3.set_xlabel('Generated')
-    ax3.set_xticks([])
-    ax3.set_yticks([])
+
+    for ax in [ax1, ax2, ax3]:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.spines.top.set_visible(False)
+        ax.spines.bottom.set_visible(False)
+        ax.spines.right.set_visible(False)
+        ax.spines.left.set_visible(False)
 
     plt.savefig(dpi=300,
                 fname='%s/imgs_task_%d.jpg' % (args.results_path, task_id),
@@ -139,7 +146,8 @@ def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_l
         decoder.eval()
         with torch.no_grad():
             z,_,_ = encoder(x)
-            reconstructed_x = decoder(torch.cat([z, x_id_onehot], dim=1))
+            z = torch.cat((z, x_id_onehot), dim=1)
+            reconstructed_x = decoder(z)
 
             x_img = plotter.get_images(x.cpu().data)
             reconstructed_x_img = plotter.get_images(reconstructed_x.cpu().data)
@@ -150,10 +158,12 @@ def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_l
     #plot pseudo random samples from the previous learned tasks
     z = Variable(Tensor(np.random.normal(0, 1, (plotter.n_total_imgs, args.latent_dim))))
     z_id = np.random.randint(0, curr_task_labels[-1]+1, size=[plotter.n_total_imgs])  
-    z_id_one_hot = get_categorical(z_id, n_classes).to(device)
+    z_id = torch.tensor(z_id, dtype=torch.int64)
+    z_id_onehot = get_categorical(z_id, n_classes).to(device)
     decoder.eval()
     with torch.no_grad():
-        pseudo_samples = decoder(torch.cat([z,Variable(Tensor(z_id_one_hot))],dim=1))
+        z = torch.cat((z, z_id_onehot), dim=1)
+        pseudo_samples = decoder(z)
         pseudo_img = plotter.get_images(pseudo_samples.cpu().data)
         #plotter.save_images(pseudo_samples.cpu().data, name="/pseudo_sample_task_%02d_epoch_%03d" % (task_id, epoch) + ".jpg")
 
@@ -161,10 +171,15 @@ def visualize(args, test_loader, encoder, decoder, epoch, n_classes, curr_task_l
 
 
 def get_categorical(labels, n_classes):
-    cat = np.array(labels.data.tolist())
-    cat = np.eye(n_classes)[cat].astype('float32')
-    cat = torch.from_numpy(cat)
-    return Variable(cat)
+    if args.cvae_model == 'convnet':
+        labels_onehot = torch.zeros(labels.shape[0], n_classes).to(device)
+        labels_onehot.scatter_(1, labels.view(-1, 1).to(device), 1)
+    elif args.cvae_model == 'mlp':
+        labels_onehot = np.array(labels.data.tolist())
+        labels_onehot = np.eye(n_classes)[labels_onehot].astype('float32')
+        labels_onehot = torch.from_numpy(labels_onehot)
+
+    return Variable(labels_onehot)
 
 def generate_pseudo_samples(device, task_id, latent_dim, curr_task_labels, decoder, replay_count, n_classes):
     gen_count = sum(replay_count[0:task_id])
@@ -177,10 +192,12 @@ def generate_pseudo_samples(device, task_id, latent_dim, curr_task_labels, decod
             x_id_ = np.concatenate((x_id_,np.random.randint(curr_task_labels[i][0], curr_task_labels[i][-1]+1, size=[replay_count[i]])))
 
     np.random.shuffle(x_id_)
+    x_id_ = torch.tensor(x_id_, dtype=torch.int64, device=device)
     x_id_one_hot = get_categorical(x_id_, n_classes).to(device)
     decoder.eval()
     with torch.no_grad():
-        x = decoder(torch.cat([z,Variable(Tensor(x_id_one_hot))], dim=1))
+        z = torch.cat((z, x_id_one_hot), dim=1)
+        x = decoder(z)
     return x, x_id_
 
 def evaluate(encoder, classifier, task_id, device, task_test_loader, write_file=False):
@@ -210,8 +227,8 @@ def evaluate(encoder, classifier, task_id, device, task_test_loader, write_file=
 
 def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_loader, test_loader, curr_task_labels, task_id, device):
     ## loss ##
-    pixelwise_loss = torch.nn.MSELoss(reduction='sum')
-    classification_loss = nn.CrossEntropyLoss()  
+    pixelwise_loss = nn.MSELoss(reduction='sum')
+    classification_loss = nn.CrossEntropyLoss()
     encoder.train()
     decoder.train()
     classifer.train()
@@ -244,7 +261,9 @@ def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_l
 
             y_onehot = get_categorical(target, args.n_classes).to(device)
             encoded_imgs,z_mu,z_var = encoder(data)
-            decoded_imgs = decoder(torch.cat([encoded_imgs, y_onehot], dim=1))
+            ### Add condition
+            encoded = torch.cat((encoded_imgs, y_onehot), dim=1)
+            decoded_imgs = decoder(encoded)
             kl_loss = 0.5 * torch.sum(torch.exp(z_var) + z_mu**2 - 1. - z_var)/args.batch_size
             rec_loss = pixelwise_loss(decoded_imgs, data)/args.batch_size
             cvae_loss = rec_loss + kl_loss
@@ -319,9 +338,28 @@ def main(args):
     
     ## MODEL ## 
     # Initialize encoder, decoder, specific, and classifier
-    encoder = Encoder(img_shape, args.n_hidden_cvae, args.latent_dim)
-    decoder = Decoder(img_shape, args.n_hidden_cvae, args.latent_dim, n_classes, use_label=True)
-    classifier = Classifier(img_shape, args.latent_dim, args.n_hidden_specific, args.n_hidden_classifier, n_classes)
+    if args.cvae_model == 'mlp':
+        encoder = Encoder(img_shape, args.n_hidden_cvae, args.latent_dim)
+        decoder = Decoder(img_shape, args.n_hidden_cvae, args.latent_dim, n_classes, use_label=True)
+    elif args.cvae_model == 'mlp-enlarged':
+        encoder = Encoder(img_shape, args.n_hidden_cvae, args.latent_dim, enlarged=True)
+        decoder = Decoder(img_shape, args.n_hidden_cvae, args.latent_dim, n_classes, use_label=True)
+    elif args.cvae_model == 'convnet':
+        encoder = ConvEncoder(args.latent_dim, args.channels)
+        decoder = ConvDecoder(args.latent_dim, args.n_classes, args.channels)
+    else:
+        print(f'Invalid cvae_model argument: {args.specific_model}')
+        exit()
+
+    if args.specific_model == 'mlp':
+        classifier = Classifier(img_shape, args.latent_dim, args.n_hidden_specific, args.n_hidden_classifier, n_classes)
+    elif args.specific_model == 'mlp-enlarged':
+        classifier = Classifier(img_shape, args.latent_dim, args.n_hidden_specific, args.n_hidden_classifier, n_classes)
+    elif args.specific_model == 'convnet':
+        pass
+    else:
+        print(f'Invalid specific_model argument: {args.specific_model}')
+        exit()
     
     encoder.to(device)
     decoder.to(device)
@@ -339,6 +377,7 @@ def main(args):
     #----------------------------------------------------------------------#
 
     for task_id in range(num_tasks):
+        torch.cuda.empty_cache()
         print("Strat training task#" + str(task_id))
         sys.stdout.flush()
         if task_id>0:            
@@ -351,7 +390,7 @@ def main(args):
                 gen_x = gen_x.reshape([gen_x.shape[0], img_shape[1],img_shape[2]])
 
             train_dataset[task_id-1].data = (gen_x*255).type(torch.uint8)
-            train_dataset[task_id-1].targets = Variable(Tensor(gen_y)).type(torch.long)
+            train_dataset[task_id-1].targets = Variable(gen_y).type(torch.long)
             # concatenate the pseduo samples of previous tasks with the data of the current task
             
             if type(train_dataset[task_id-1].data) == torch.Tensor and type(train_dataset[task_id].data) == np.ndarray:
