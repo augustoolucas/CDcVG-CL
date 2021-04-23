@@ -16,6 +16,7 @@ import itertools
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+from tqdm import tqdm
 import torch.nn as nn
 from matplotlib.ticker import MaxNLocator
 #from torch.autograd import Variable
@@ -243,8 +244,8 @@ def train(args, optimizer_cvae, optimizer_C, encoder, decoder,classifer, train_l
     kl_loss_over_epochs = []
     classifier_loss_over_epochs = []
     total_loss_over_epochs = []
-    for epoch in range(args.num_epochs):
-        print(f'Epoch: {epoch}')
+    for epoch in tqdm(range(args.num_epochs)):
+        #print(f'Epoch: {epoch}')
         losses = {'cvae': 0,
                   'rec': 0,
                   'kl': 0,
@@ -430,6 +431,7 @@ def main(args):
         print(f'Hidden Units Specific: {args.n_hidden_specific}', file=writer)
         print(f'Hidden Units Classifier: {args.n_hidden_classifier}', file=writer)
         print('', file=writer)
+
     for task_id in range(num_tasks):
         task_acc = evaluate(encoder, classifier, task_id, device, test_loaders[task_id], write_file=True)
         test_accs.append(task_acc)
