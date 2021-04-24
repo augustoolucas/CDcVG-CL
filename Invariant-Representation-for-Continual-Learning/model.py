@@ -118,25 +118,25 @@ class ConvDecoder(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, img_shape, n_hidden, latent_dim, enlarged=False):
+    def __init__(self, img_shape, n_hidden, latent_dim, n_layers=1):
         super(Encoder, self).__init__()
 
-        self.model = nn.Sequential(nn.Linear(int(np.prod(img_shape)), n_hidden),
-                                   nn.BatchNorm1d(n_hidden),
-                                   nn.ReLU(inplace=True))
+        self.model = nn.Sequential()
 
-        enlarged_modules = nn.Sequential(nn.Linear(n_hidden, int(n_hidden//2)),
-                                         nn.BatchNorm1d(int(n_hidden//2)),
-                                         nn.ReLU(inplace=True))
+        input_dim = int(np.prod(img_shape))
 
-        reparameterization_input_size = n_hidden
+        for hl in range(n_layers):
+            output_dim = int(n_hidden//2**hl)
+            new_module = nn.Sequential(nn.Linear(input_dim, output_dim),
+                                       nn.BatchNorm1d(output_dim),
+                                       nn.ReLU(inplace=True))
 
-        if enlarged:
-            self.model.add_module('enlarged_modules', enlarged_modules)
-            reparameterization_input_size = int(n_hidden//2)
+            self.model.add_module(f'layer_{hl}', new_module)
 
-        self.mu = nn.Linear(reparameterization_input_size, latent_dim)
-        self.logvar = nn.Linear(reparameterization_input_size, latent_dim)
+            input_dim = output_dim
+
+        self.mu = nn.Linear(input_dim, latent_dim)
+        self.logvar = nn.Linear(input_dim, latent_dim)
         self.latent_dim = latent_dim
         
     def forward(self, img):
@@ -151,11 +151,11 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self,
                  img_shape,
-                 n_hidden,
+                 layer_size,
                  latent_dim,
                  n_classes,
                  use_label=True,
-                 n_hidden_layers=1):
+                 n_layers=1):
         super(Decoder, self).__init__()
         # conditional generation
         if use_label:
@@ -165,8 +165,8 @@ class Decoder(nn.Module):
 
         self.model = nn.Sequential()
 
-        for hl in range(1, n_hidden_layers+1):
-            output_dim = int(n_hidden//2**(n_hidden_layers-hl))
+        for hl in range(1, n_layers+1):
+            output_dim = int(layer_size//2**(n_layers-hl))
             new_module = nn.Sequential(nn.Linear(input_dim, output_dim),
                                        nn.BatchNorm1d(output_dim),
                                        nn.ReLU(inplace=True))
@@ -187,19 +187,49 @@ class Decoder(nn.Module):
         return img
 
 class Classifier(nn.Module):
-    def __init__(self, img_shape, invariant_n_hidden, specific_n_hidden, classification_n_hidden, n_classes):
+    def __init__(self,
+                 img_shape,
+                 invariant_size,
+                 specific_size,
+                 classification_n_hidden,
+                 n_classes,
+                 specific_layers=0,
+                 classifier_layers=1):
         super(Classifier, self).__init__()
 
         # specific module
-        self.specific = nn.Sequential(nn.Linear(int(np.prod(img_shape)), specific_n_hidden),
-                                      nn.ReLU(inplace=True))
+        self.specific = nn.Sequential()
+
+        input_dim = int(np.prod(img_shape))
+
+        for hl in range(1, specific_layers+1):
+            output_dim = int(specific_size//2**(specific_layers-hl))
+            new_module = nn.Sequential(nn.Linear(input_dim, output_dim),
+                                       nn.ReLU(inplace=True))
+
+            self.specific.add_module(f'layer_{hl}', new_module)
+
+            input_dim = output_dim
+
         # classification module
-        self.classifier_layer = nn.Sequential(nn.Linear(specific_n_hidden + invariant_n_hidden, classification_n_hidden),
-                                              nn.ReLU(inplace=True))
-        self.output = nn.Linear(classification_n_hidden, n_classes)
+        self.classifier = nn.Sequential()
+        input_dim = input_dim + invariant_size
+        classifier_layers -= 1
+        for hl in range(1, classifier_layers+1):
+            output_dim = int(classification_n_hidden//2**(classifier_layers-hl))
+            new_module = nn.Sequential(nn.Linear(input_dim,
+                                                 output_dim),
+                                       nn.ReLU(inplace=True))
+
+            self.classifier.add_module(f'layer_{hl}', new_module)
+            input_dim = output_dim
+
+        output_layer = nn.Sequential(nn.Linear(input_dim, n_classes),
+                                     nn.Softmax())
+
+        self.classifier.add_module('output_layer', output_layer)
 
     def forward(self, img, invariant):
         discriminative = self.specific(img)
-        x = self.classifier_layer(torch.cat([discriminative, invariant],dim=1))
-        logits = self.output(x)
-        return logits
+        x = self.classifier(torch.cat([discriminative, invariant],dim=1))
+        return x
