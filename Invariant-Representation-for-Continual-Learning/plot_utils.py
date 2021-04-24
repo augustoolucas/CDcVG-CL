@@ -6,7 +6,8 @@ from PIL import Image
 
 # this function is borrowed from https://github.com/hwalsuklee/tensorflow-mnist-AAE/blob/master/plot_utils.py
 class plot_samples():
-    def __init__(self, DIR, n_img_x=8, n_img_y=8, img_w=28, img_h=28, n_channels=1):
+    def __init__(self, DIR, img_shape, n_img_x=8, n_img_y=8):
+        n_channels, img_w, img_h = img_shape
         self.DIR = DIR
         assert n_img_x > 0 and n_img_y > 0
         self.n_img_x = n_img_x
