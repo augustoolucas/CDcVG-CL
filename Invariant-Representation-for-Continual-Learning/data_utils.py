@@ -18,21 +18,22 @@ opener.addheaders = [('User-agent', 'Mozilla/5.0')]
 urllib.request.install_opener(opener)
 
 def get_train_loader(train_dataset,batch_size):
-    train_loader = DataLoader(
-    train_dataset,
-    batch_size,
-    num_workers=0,
-    pin_memory=True, shuffle=True)
+    train_loader = DataLoader(train_dataset,
+                              batch_size,
+                              num_workers=0,
+                              pin_memory=True,
+                              shuffle=True,
+                              drop_last=True)
     return train_loader
 
 
 def get_test_loader(test_dataset,test_batch_size):
-    test_loader = DataLoader(
-        test_dataset,
-        test_batch_size,
-        shuffle=True,
-        num_workers=0,
-        pin_memory=True)
+    test_loader = DataLoader(test_dataset,
+                             test_batch_size,
+                             shuffle=True,
+                             num_workers=0,
+                             pin_memory=True,
+                             drop_last=True)
     return test_loader
 
 
@@ -141,9 +142,8 @@ def load_data(dataset):
 
     return full_dataset,test_dataset
 
-def task_construction(task_labels, dataset):
-    full_dataset,test_dataset = load_data(dataset)
-    train_dataset = split_dataset_by_labels(full_dataset, task_labels)
+def task_construction(task_labels, train_dataset, test_dataset):
+    train_dataset = split_dataset_by_labels(train_dataset, task_labels)
     test_dataset = split_dataset_by_labels(test_dataset, task_labels)
     return train_dataset,test_dataset
 
