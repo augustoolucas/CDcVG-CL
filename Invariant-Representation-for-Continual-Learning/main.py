@@ -16,6 +16,7 @@ import itertools
 import numpy as np
 import matplotlib.pyplot as plt
 import optuna
+import mlflow
 import torch
 from tqdm import tqdm
 import torch.nn as nn
@@ -443,7 +444,6 @@ def main(trial):
         test_loader = data_utils.get_test_loader(test_dataset[task_id], args.test_batch_size)
         test_loaders.append(test_loader)
         # train current task
-        print(trial.params)
         test_acc = train(num_epochs, n_classes, latent_dim, train_batch_size,
                          optimizer_cvae, optimizer_C, encoder, decoder,
                          classifier, img_shape, train_loader, test_loader,
@@ -495,9 +495,19 @@ def main(trial):
     print('Average accuracy in task agnostic inference (ACC):  {:.3f}'.format(ACC))
     print('Average backward transfer (BWT): {:.3f}'.format(BWT))
 
+    with mlflow.start_run():
+        mlflow.log_param('Trial', trial.number)
+        for k, v in trial.params.items():
+            mlflow.log_param(k, v)
+
+        for idx, v in enumerate(test_accs):
+            mlflow.log_metric(f'Acc Task {idx}', v)
+
+        mlflow.log_metric('Avg Acc', ACC)
+
     return ACC
 
 
 if __name__ == '__main__':
-    study = optuna.create_study()
-    study.optimize(main, n_trials=100)
+    study = optuna.create_study(direction='maximize')
+    study.optimize(main, n_trials=100, n_jobs=3)
