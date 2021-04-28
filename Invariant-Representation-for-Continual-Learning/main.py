@@ -17,6 +17,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import optuna
 import mlflow
+import joblib
+#from apex import amp
 import torch
 from tqdm import tqdm
 import torch.nn as nn
@@ -284,7 +286,10 @@ def train(num_epochs, n_classes, latent_dim, batch_size, optimizer_cvae, optimiz
             kl_loss = 0.5 * torch.sum(torch.exp(z_var) + z_mu**2 - 1. - z_var)/batch_size
             rec_loss = pixelwise_loss(decoded_imgs, data)/batch_size
             cvae_loss = rec_loss + kl_loss
+
+            #with amp.scale_loss(cvae_loss, optimizer_cvae) as cvae_loss:
             cvae_loss.backward()
+
             optimizer_cvae.step()
 
             #---------------------------#
@@ -297,7 +302,10 @@ def train(num_epochs, n_classes, latent_dim, batch_size, optimizer_cvae, optimiz
             # the classifier includes the specific module
             outputs = classifer(data.view(data.shape[0], -1), z_representation.detach())
             c_loss = classification_loss(outputs, target)
+
+            #with amp.scale_loss(c_loss, optimizer_C) as c_loss:
             c_loss.backward()
+
             optimizer_C.step()
 
             total_loss = cvae_loss.item() + c_loss.item()
@@ -331,7 +339,7 @@ def main(trial):
 
     use_cuda = not args.no_cuda and torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
-    print("used device: " + str(device))
+    print("used device: " + str(device).upper())
 
     ## DATA ##
     # Load data and construct the tasks 
@@ -371,12 +379,12 @@ def main(trial):
     # Initialize encoder, decoder, specific, and classifier
     if args.cvae_model == 'mlp':
         encoder = Encoder(img_shape, max_layer_size_cvae, latent_dim, 
-                          n_layers_cvae)
+                          n_layers_cvae).to(device)
         decoder = Decoder(img_shape, max_layer_size_cvae, latent_dim,
-                          n_classes, n_layers=n_layers_cvae)
+                          n_classes, n_layers=n_layers_cvae).to(device)
     elif args.cvae_model == 'convnet':
-        encoder = ConvEncoder(latent_dim, args.channels)
-        decoder = ConvDecoder(latent_dim, args.n_classes, args.channels)
+        encoder = ConvEncoder(latent_dim, args.channels).to(device)
+        decoder = ConvDecoder(latent_dim, n_classes, args.channels).to(device)
     else:
         print(f'Invalid cvae_model argument: {args.specific_model}')
         exit()
@@ -386,22 +394,29 @@ def main(trial):
                                 specific_representation_size,
                                 max_layer_size_classifier,
                                 n_classes, n_layers_specific,
-                                n_layers_classifier)
+                                n_layers_classifier).to(device)
     elif args.specific_model == 'convnet':
         pass
     else:
         print(f'Invalid specific_model argument: {args.specific_model}')
         exit()
     
-    encoder.to(device)
-    decoder.to(device)
-    classifier.to(device)
-
-    cvae_lr = trial.suggest_float('cvae_learning_rate', 1e-5, 1e-2, log=True)
-    classifier_lr = trial.suggest_float('classifier_learning_rate', 1e-5, 1e-2, log=True)
+    cvae_lr = trial.suggest_loguniform('cvae_learning_rate', 1e-5, 1e-2)
+    classifier_lr = trial.suggest_loguniform('classifier_learning_rate', 1e-5, 1e-2)
     ## OPTIMIZERS ##
     optimizer_cvae = torch.optim.Adam(itertools.chain(encoder.parameters(), decoder.parameters()), lr=cvae_lr)
     optimizer_C = torch.optim.Adam(classifier.parameters(), lr=classifier_lr)
+
+    """
+    [encoder, decoder], optimizer_cvae = amp.initialize([encoder, decoder],
+                                                        optimizer_cvae,
+                                                        opt_level='O1',
+                                                        verbosity=0)
+    classifier, optimizer_C = amp.initialize(classifier,
+                                             optimizer_C,
+                                             opt_level='O1',
+                                             verbosity=0)
+    """
 
     test_loaders = []
     acc_of_task_t_at_time_t = [] # acc of each task at the end of learning it
@@ -411,8 +426,9 @@ def main(trial):
     #----------------------------------------------------------------------#
 
     train_batch_size = trial.suggest_int('train_batch_size', 64, 512, 64)
-    num_epochs = trial.suggest_int('num_epochs', 3, 5, 1)
+    num_epochs = trial.suggest_int('num_epochs', 5, 500, 5)
 
+    print(trial.params)
     for task_id in range(num_tasks):
         torch.cuda.empty_cache()
         print("Strat training task#" + str(task_id))
@@ -500,6 +516,9 @@ def main(trial):
         for k, v in trial.params.items():
             mlflow.log_param(k, v)
 
+        mlflow.log_param('CVAE_Model', args.cvae_model)
+        mlflow.log_param('Specific_Model', args.specific_model)
+
         for idx, v in enumerate(test_accs):
             mlflow.log_metric(f'Acc Task {idx}', v)
 
@@ -509,5 +528,18 @@ def main(trial):
 
 
 if __name__ == '__main__':
-    study = optuna.create_study(direction='maximize')
-    study.optimize(main, n_trials=100, n_jobs=3)
+    OPTUNA_DUMP = f'{args.cvae_model}_cvae_{args.specific_model}_specific.pkl'
+
+    if os.path.exists(f'./Optuna/{OPTUNA_DUMP}'):
+        study = joblib.load(f'./Optuna/{OPTUNA_DUMP}')
+        print("Best trial until now:")
+        print(" Value: ", study.best_trial.value)
+        print(" Params: ")
+
+        for key, value in study.best_trial.params.items():
+            print(f"    {key}: {value}")
+    else:
+        study = optuna.create_study(direction='maximize')
+
+    study.optimize(main, n_trials=10, n_jobs=1)
+    joblib.dump(study, f'./Optuna/{OPTUNA_DUMP}')
