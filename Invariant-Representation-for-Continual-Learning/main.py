@@ -361,7 +361,7 @@ def main(trial):
                                                                test_dataset)
     
     n_layers_cvae = trial.suggest_int('num_layers_cvae', 1, 3, 1)
-    max_layer_size_cvae = trial.suggest_int('max_layer_size_cvae', 300, 600, 100)
+    layer_size_cvae = trial.suggest_int('max_layer_size_cvae', 300, 600, 100)
     latent_dim = trial.suggest_int('latent_dim', 16, 64, 16)
 
     n_layers_specific = trial.suggest_int('num_layers_specific',
@@ -371,32 +371,35 @@ def main(trial):
 
     n_layers_classifier = trial.suggest_int('num_layers_classifier',
                                                    1, 3, 1)
-    max_layer_size_classifier = trial.suggest_int('max_layer_size_classifier',
+    layer_size_classifier = trial.suggest_int('max_layer_size_classifier',
                                                   20, 80, 10)
     results_path = f'Optuna/Trial {trial.number}'
     check_path(results_path)
     ## MODEL ## 
     # Initialize encoder, decoder, specific, and classifier
     if args.cvae_model == 'mlp':
-        encoder = Encoder(img_shape, max_layer_size_cvae, latent_dim, 
+        encoder = Encoder(img_shape, layer_size_cvae, latent_dim, 
                           n_layers_cvae).to(device)
-        decoder = Decoder(img_shape, max_layer_size_cvae, latent_dim,
+        decoder = Decoder(img_shape, layer_size_cvae, latent_dim,
                           n_classes, n_layers=n_layers_cvae).to(device)
     elif args.cvae_model == 'convnet':
-        encoder = ConvEncoder(latent_dim, args.channels).to(device)
-        decoder = ConvDecoder(latent_dim, n_classes, args.channels).to(device)
+        encoder = ConvEncoder(img_shape, latent_dim).to(device)
+        decoder = ConvDecoder(img_shape, latent_dim + n_classes).to(device)
     else:
-        print(f'Invalid cvae_model argument: {args.specific_model}')
+        print(f'Invalid cvae_model argument: {args.cvae_model}')
         exit()
 
     if args.specific_model == 'mlp':
         classifier = Classifier(img_shape, latent_dim,
                                 specific_representation_size,
-                                max_layer_size_classifier,
+                                layer_size_classifier,
                                 n_classes, n_layers_specific,
                                 n_layers_classifier).to(device)
     elif args.specific_model == 'convnet':
-        pass
+        classifier = ConvClassifier(img_shape, specific_representation_size,
+                                    n_layers_classifier,
+                                    layer_size_classifier,
+                                    n_classes, latent_dim).to(device)
     else:
         print(f'Invalid specific_model argument: {args.specific_model}')
         exit()
@@ -482,7 +485,7 @@ def main(trial):
         print(f'CVAE Learning rate: {cvae_lr}', file=writer)
         print(f'Classifier Learning rate: {classifier_lr}', file=writer)
         print(f'Batch Size: {train_batch_size}', file=writer)
-        print(f'Hidden Units CVAE: {max_layer_size_cvae}', file=writer)
+        print(f'Hidden Units CVAE: {layer_size_cvae}', file=writer)
         print(f'Hidden Units Specific: {args.n_hidden_specific}', file=writer)
         print(f'Hidden Units Classifier: {args.n_hidden_classifier}', file=writer)
         print('', file=writer)
@@ -511,7 +514,7 @@ def main(trial):
     print('Average accuracy in task agnostic inference (ACC):  {:.3f}'.format(ACC))
     print('Average backward transfer (BWT): {:.3f}'.format(BWT))
 
-    with mlflow.start_run():
+    with mlflow.start_run(experiment_id=0):
         mlflow.log_param('Trial', trial.number)
         for k, v in trial.params.items():
             mlflow.log_param(k, v)

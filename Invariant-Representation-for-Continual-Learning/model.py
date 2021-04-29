@@ -18,9 +18,12 @@ def reparameterization(mu, logvar,latent_dim):
     return z
 
 
+
 class ConvEncoder(nn.Module):
-    def __init__(self, num_latent, img_channels):
+    def __init__(self, img_shape, num_latent):
         super(ConvEncoder, self).__init__()
+        
+        img_channels = img_shape[0]
 
         self.enc_conv_1 = nn.Conv2d(in_channels=img_channels,
                                     out_channels=16,
@@ -70,9 +73,12 @@ class ConvEncoder(nn.Module):
 
 
 class ConvDecoder(nn.Module):
-    def __init__(self, num_latent, num_classes, img_channels):
+    def __init__(self, img_shape, input_size):
         super(ConvDecoder, self).__init__()
-        self.dec_linear_1 = nn.Linear(num_latent+num_classes, 64*2*2)
+
+        img_channels = img_shape[0]
+
+        self.dec_linear_1 = nn.Linear(input_size, 64*2*2)
 
         self.dec_deconv_1 = nn.ConvTranspose2d(in_channels=64,
                                                out_channels=32,
@@ -186,15 +192,76 @@ class Decoder(nn.Module):
         img = img_flat.view(img_flat.shape[0], *self.img_shape)
         return img
 
+
+class ConvClassifier(nn.Module):
+    def __init__(self,
+                 img_shape,
+                 specific_size,
+                 n_layers_classifier,
+                 classification_layer_size,
+                 n_classes,
+                 latent_dim):
+        super(ConvEncoder, self).__init__()
+
+        # Specific Module
+        img_channels = img_shape[0]
+
+        self.specific_conv = nn.Sequential(nn.Conv2d(in_channels=img_channels,
+                                                     out_channels=16,
+                                                     kernel_size=(6, 6),
+                                                     stride=(2, 2)),
+                                           nn.LeakyReLU(inplace=True),
+                                           nn.Conv2d(in_channels=16,
+                                                     out_channels=32,
+                                                     kernel_size=(4, 4),
+                                                     stride=(2, 2)),
+                                           nn.LeakyReLU(inplace=True),
+                                           nn.Conv2d(in_channels=32,
+                                                     out_channels=64,
+                                                     kernel_size=(2, 2),
+                                                     stride=(2, 2)))
+
+        self.specific_linear = nn.Sequential(nn.Linear(self.linear_input_size,
+                                                       specific_size),
+                                             nn.LeakyReLU(inplace=True))
+
+        # Classifier Module
+        input_dim = specific_size + latent_dim
+        self.classifier = nn.Sequential()
+
+        classifier_layers -= 1
+        for hl in range(1, n_layers_classifier+1):
+            output_dim = int(classification_layer_size//2**(classifier_layers-hl))
+            new_module = nn.Sequential(nn.Linear(in_features=input_dim,
+                                                 out_features=output_dim),
+                                       nn.ReLU(inplace=True))
+
+            self.classifier.add_module(f'layer_{hl}', new_module)
+            input_dim = output_dim
+
+        output_layer = nn.Sequential(nn.Linear(in_features=input_dim,
+                                               out_features=n_classes),
+                                     nn.Softmax())
+
+        self.classifier.add_module('output_layer', output_layer)
+
+    def forward(self, input):
+        x = self.specific_conv(input)
+        self.linear_input_size = np.prod(x.shape)
+        x = self.specific_linear(x.view(x.size(0), -1))
+
+        return x
+
+
 class Classifier(nn.Module):
     def __init__(self,
                  img_shape,
                  invariant_size,
                  specific_size,
-                 classification_n_hidden,
+                 classification_layer_size,
                  n_classes,
                  specific_layers=0,
-                 classifier_layers=1):
+                 n_layers_classifier=1):
         super(Classifier, self).__init__()
 
         # specific module
@@ -214,17 +281,18 @@ class Classifier(nn.Module):
         # classification module
         self.classifier = nn.Sequential()
         input_dim = input_dim + invariant_size
-        classifier_layers -= 1
-        for hl in range(1, classifier_layers+1):
-            output_dim = int(classification_n_hidden//2**(classifier_layers-hl))
-            new_module = nn.Sequential(nn.Linear(input_dim,
-                                                 output_dim),
+        n_layers_classifier -= 1
+        for hl in range(1, n_layers_classifier+1):
+            output_dim = int(classification_layer_size//2**(n_layers_classifier-hl))
+            new_module = nn.Sequential(nn.Linear(in_features=input_dim,
+                                                 out_features=output_dim),
                                        nn.ReLU(inplace=True))
 
             self.classifier.add_module(f'layer_{hl}', new_module)
             input_dim = output_dim
 
-        output_layer = nn.Sequential(nn.Linear(input_dim, n_classes),
+        output_layer = nn.Sequential(nn.Linear(in_features=input_dim,
+                                               out_features=n_classes),
                                      nn.Softmax())
 
         self.classifier.add_module('output_layer', output_layer)
