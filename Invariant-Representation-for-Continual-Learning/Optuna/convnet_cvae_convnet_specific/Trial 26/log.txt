@@ -1,0 +1,16 @@
+Img Shape: (1, 28, 28)
+Classes: 10
+Dataset: MNIST
+Epochs: 5
+CVAE Learning rate: 0.0001208884431477604
+Classifier Learning rate: 0.00041243121585695703
+Batch Size: 320
+Hidden Units Classifier: 40
+
+Test evaluation of task_id: 0 ACC: 419/2000 (20.950%)
+Test evaluation of task_id: 1 ACC: 13/2000 (0.650%)
+Test evaluation of task_id: 2 ACC: 49/1000 (4.900%)
+Test evaluation of task_id: 3 ACC: 640/1000 (64.000%)
+Test evaluation of task_id: 4 ACC: 996/1000 (99.600%)
+Average accuracy in task agnostic inference (ACC):  38.020
+Average backward transfer (BWT): -62.830

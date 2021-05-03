@@ -1,0 +1,15 @@
+artifact_uri: file:///home/lucas-a-alcantara/Repositories/continual-learning-playground/Invariant-Representation-for-Continual-Learning/mlruns/1/14f106ae387546a8835a3bd49b551d6b/artifacts
+end_time: 1619834116071
+entry_point_name: ''
+experiment_id: '1'
+lifecycle_stage: active
+name: ''
+run_id: 14f106ae387546a8835a3bd49b551d6b
+run_uuid: 14f106ae387546a8835a3bd49b551d6b
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1619834115826
+status: 3
+tags: []
+user_id: lucas-a-alcantara
