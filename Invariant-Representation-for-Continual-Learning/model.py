@@ -201,7 +201,7 @@ class ConvClassifier(nn.Module):
                  classification_layer_size,
                  n_classes,
                  latent_dim):
-        super(ConvEncoder, self).__init__()
+        super(ConvClassifier, self).__init__()
 
         # Specific Module
         img_channels = img_shape[0]
@@ -221,7 +221,7 @@ class ConvClassifier(nn.Module):
                                                      kernel_size=(2, 2),
                                                      stride=(2, 2)))
 
-        self.specific_linear = nn.Sequential(nn.Linear(self.linear_input_size,
+        self.specific_linear = nn.Sequential(nn.Linear(64*2*2,
                                                        specific_size),
                                              nn.LeakyReLU(inplace=True))
 
@@ -229,9 +229,9 @@ class ConvClassifier(nn.Module):
         input_dim = specific_size + latent_dim
         self.classifier = nn.Sequential()
 
-        classifier_layers -= 1
+        n_layers_classifier -= 1
         for hl in range(1, n_layers_classifier+1):
-            output_dim = int(classification_layer_size//2**(classifier_layers-hl))
+            output_dim = int(classification_layer_size//2**(n_layers_classifier-hl))
             new_module = nn.Sequential(nn.Linear(in_features=input_dim,
                                                  out_features=output_dim),
                                        nn.ReLU(inplace=True))
@@ -245,10 +245,10 @@ class ConvClassifier(nn.Module):
 
         self.classifier.add_module('output_layer', output_layer)
 
-    def forward(self, input):
-        x = self.specific_conv(input)
-        self.linear_input_size = np.prod(x.shape)
+    def forward(self, img, invariant):
+        x = self.specific_conv(img)
         x = self.specific_linear(x.view(x.size(0), -1))
+        x = self.classifier(torch.cat([x, invariant], dim=1))
 
         return x
 
@@ -298,6 +298,6 @@ class Classifier(nn.Module):
         self.classifier.add_module('output_layer', output_layer)
 
     def forward(self, img, invariant):
-        discriminative = self.specific(img)
+        discriminative = self.specific(img.view(img.size(0), -1))
         x = self.classifier(torch.cat([discriminative, invariant],dim=1))
         return x

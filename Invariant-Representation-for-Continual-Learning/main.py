@@ -219,7 +219,7 @@ def generate_pseudo_samples(device, task_id, latent_dim, curr_task_labels, decod
         x = decoder(z)
     return x, x_id_
 
-def evaluate(encoder, classifier, task_id, device, task_test_loader, path, write_file=False):
+def evaluate(encoder, classifier, task_id, device, task_test_loader, path, final_tests=False):
     correct_class = 0    
     n = 0
     classifier.eval()
@@ -229,17 +229,22 @@ def evaluate(encoder, classifier, task_id, device, task_test_loader, path, write
             data, target = data.to(device), target.to(device, dtype=torch.int64)
             n += target.shape[0]
             z_representation,_,_ = encoder(data)
-            model_output = classifier(data.view(data.shape[0], -1), z_representation)
+            model_output = classifier(data, z_representation)
             pred_class = model_output.argmax(dim=1, keepdim=True)
             correct_class += pred_class.eq(target.view_as(pred_class)).sum().item()
 
-    if write_file:
+    if final_tests:
         with open(f'{path}/log.txt', 'a+') as writer:
             print('Test evaluation of task_id: {} ACC: {}/{} ({:.3f}%)'.format(
             task_id, correct_class, n, 100*correct_class/float(n)), file=writer)
 
     print('Test evaluation of task_id: {} ACC: {}/{} ({:.3f}%)'.format(
          task_id, correct_class, n, 100*correct_class/float(n)))  
+
+    if not final_tests:
+        if 100*correct_class/float(n) < 80:
+            print('Task accuracy too low, prunning trial.')
+            raise optuna.exceptions.TrialPruned()
 
     return 100. * correct_class / float(n)
 
@@ -300,7 +305,7 @@ def train(num_epochs, n_classes, latent_dim, batch_size, optimizer_cvae, optimiz
             classifer.zero_grad()
             z_representation,_,_ = encoder(data)
             # the classifier includes the specific module
-            outputs = classifer(data.view(data.shape[0], -1), z_representation.detach())
+            outputs = classifer(data, z_representation.detach())
             c_loss = classification_loss(outputs, target)
 
             #with amp.scale_loss(c_loss, optimizer_C) as c_loss:
@@ -324,14 +329,14 @@ def train(num_epochs, n_classes, latent_dim, batch_size, optimizer_cvae, optimiz
         losses_over_time['total'].append(losses['total'])
         
         if epoch+1 == num_epochs:
-           test_acc = evaluate(encoder, classifer, task_id, device, test_loader, path, write_file=False)
+           test_acc = evaluate(encoder, classifer, task_id, device, test_loader, path, final_tests=False)
            visualize(args, test_loader, encoder, decoder, latent_dim, img_shape, n_classes, curr_task_labels, device, task_id, path)
     
     save_train_losses(num_epochs, losses_over_time, task_id, path)
 
     return test_acc
 
-def main(trial):
+def main(trial, experiment_path):
     # set seed
     torch.manual_seed(args.seed)
     os.environ['PYTHONHASHSEED'] = str(args.seed)
@@ -360,12 +365,8 @@ def main(trial):
                                                                train_dataset,
                                                                test_dataset)
     
-    n_layers_cvae = trial.suggest_int('num_layers_cvae', 1, 3, 1)
-    layer_size_cvae = trial.suggest_int('max_layer_size_cvae', 300, 600, 100)
     latent_dim = trial.suggest_int('latent_dim', 16, 64, 16)
 
-    n_layers_specific = trial.suggest_int('num_layers_specific',
-                                                 1, 3, 1)
     specific_representation_size = trial.suggest_int('specific_representation_size',
                                                      10, 60, 10)
 
@@ -373,11 +374,14 @@ def main(trial):
                                                    1, 3, 1)
     layer_size_classifier = trial.suggest_int('max_layer_size_classifier',
                                                   20, 80, 10)
-    results_path = f'Optuna/Trial {trial.number}'
+    results_path = f'{experiment_path}/Trial {trial.number}'
     check_path(results_path)
     ## MODEL ## 
     # Initialize encoder, decoder, specific, and classifier
     if args.cvae_model == 'mlp':
+        n_layers_cvae = trial.suggest_int('num_layers_cvae', 1, 3, 1)
+        layer_size_cvae = trial.suggest_int('max_layer_size_cvae', 300, 600, 100)
+
         encoder = Encoder(img_shape, layer_size_cvae, latent_dim, 
                           n_layers_cvae).to(device)
         decoder = Decoder(img_shape, layer_size_cvae, latent_dim,
@@ -390,6 +394,7 @@ def main(trial):
         exit()
 
     if args.specific_model == 'mlp':
+        n_layers_specific = trial.suggest_int('num_layers_specific', 1, 3, 1)
         classifier = Classifier(img_shape, latent_dim,
                                 specific_representation_size,
                                 layer_size_classifier,
@@ -485,15 +490,20 @@ def main(trial):
         print(f'CVAE Learning rate: {cvae_lr}', file=writer)
         print(f'Classifier Learning rate: {classifier_lr}', file=writer)
         print(f'Batch Size: {train_batch_size}', file=writer)
-        print(f'Hidden Units CVAE: {layer_size_cvae}', file=writer)
-        print(f'Hidden Units Specific: {args.n_hidden_specific}', file=writer)
+
+        if args.cvae_model == 'mlp':
+            print(f'Hidden Units CVAE: {layer_size_cvae}', file=writer)
+
+        if args.specific_model == 'mlp':
+            print(f'Hidden Units Specific: {args.n_hidden_specific}', file=writer)
+
         print(f'Hidden Units Classifier: {args.n_hidden_classifier}', file=writer)
         print('', file=writer)
 
     for task_id in range(num_tasks):
         task_acc = evaluate(encoder, classifier, task_id, device,
                             test_loaders[task_id], results_path,
-                            write_file=True)
+                            final_tests=True)
         test_accs.append(task_acc)
         ACC += task_acc
         BWT += (task_acc - acc_of_task_t_at_time_t[task_id])
@@ -514,11 +524,12 @@ def main(trial):
     print('Average accuracy in task agnostic inference (ACC):  {:.3f}'.format(ACC))
     print('Average backward transfer (BWT): {:.3f}'.format(BWT))
 
-    with mlflow.start_run(experiment_id=0):
+    with mlflow.start_run():
         mlflow.log_param('Trial', trial.number)
         for k, v in trial.params.items():
             mlflow.log_param(k, v)
 
+        mlflow.log_param('Image_Shape', img_shape)
         mlflow.log_param('CVAE_Model', args.cvae_model)
         mlflow.log_param('Specific_Model', args.specific_model)
 
@@ -531,10 +542,15 @@ def main(trial):
 
 
 if __name__ == '__main__':
-    OPTUNA_DUMP = f'{args.cvae_model}_cvae_{args.specific_model}_specific.pkl'
+    experiment_name = f'{args.cvae_model}_cvae_{args.specific_model}_specific'
+    experiment_path = f'./Optuna/{experiment_name}'
+    OPTUNA_DUMP = f'{experiment_name}.pkl'
 
-    if os.path.exists(f'./Optuna/{OPTUNA_DUMP}'):
-        study = joblib.load(f'./Optuna/{OPTUNA_DUMP}')
+    if not os.path.exists(experiment_path):
+        os.mkdir(experiment_path)
+        
+    if os.path.exists(f'{experiment_path}/{OPTUNA_DUMP}'):
+        study = joblib.load(f'{experiment_path}/{OPTUNA_DUMP}')
         print("Best trial until now:")
         print(" Value: ", study.best_trial.value)
         print(" Params: ")
@@ -542,7 +558,9 @@ if __name__ == '__main__':
         for key, value in study.best_trial.params.items():
             print(f"    {key}: {value}")
     else:
-        study = optuna.create_study(direction='maximize')
+        study = optuna.create_study(study_name=experiment_name,
+                                    direction='maximize')
 
-    study.optimize(main, n_trials=10, n_jobs=1)
-    joblib.dump(study, f'./Optuna/{OPTUNA_DUMP}')
+    mlflow.set_experiment(experiment_name=experiment_name)
+    study.optimize(lambda trial: main(trial, experiment_path), n_trials=25, n_jobs=1)
+    joblib.dump(study, f'./{experiment_path}/{OPTUNA_DUMP}')
