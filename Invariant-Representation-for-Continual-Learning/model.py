@@ -1,6 +1,3 @@
-# Author: Ghada Sokar et al.
-# This is the implementation for the Learning Invariant Representation for Continual Learning paper in AAAI workshop on Meta-Learning for Computer Vision
-
 import numpy as np
 from torch.autograd import Variable
 import torch.nn as nn
@@ -27,12 +24,12 @@ class ConvEncoder(nn.Module):
 
         self.enc_conv_1 = nn.Conv2d(in_channels=img_channels,
                                     out_channels=16,
-                                    kernel_size=(6, 6),
+                                    kernel_size=(3, 3),
                                     stride=(2, 2))
 
         self.enc_conv_2 = nn.Conv2d(in_channels=16,
                                     out_channels=32,
-                                    kernel_size=(4, 4),
+                                    kernel_size=(3, 3),
                                     stride=(2, 2))
 
         self.enc_conv_3 = nn.Conv2d(in_channels=32,
@@ -40,8 +37,8 @@ class ConvEncoder(nn.Module):
                                     kernel_size=(2, 2),
                                     stride=(2, 2))
 
-        self.z_mean = nn.Linear(64*2*2, num_latent)
-        self.z_log_var = nn.Linear(64*2*2, num_latent)
+        self.z_mean = nn.Linear(64*3*3, num_latent)
+        self.z_log_var = nn.Linear(64*3*3, num_latent)
 
     def reparameterize(self, z_mu, z_log_var):
         eps = torch.randn(z_mu.size(0), z_mu.size(1)).to(device)
@@ -78,7 +75,7 @@ class ConvDecoder(nn.Module):
 
         img_channels = img_shape[0]
 
-        self.dec_linear_1 = nn.Linear(input_size, 64*2*2)
+        self.dec_linear_1 = nn.Linear(input_size, 64*3*3)
 
         self.dec_deconv_1 = nn.ConvTranspose2d(in_channels=64,
                                                out_channels=32,
@@ -88,20 +85,20 @@ class ConvDecoder(nn.Module):
 
         self.dec_deconv_2 = nn.ConvTranspose2d(in_channels=32,
                                                out_channels=16,
-                                               kernel_size=(4, 4),
-                                               stride=(3, 3),
-                                               padding=1)
+                                               kernel_size=(3, 3),
+                                               stride=(2, 2),
+                                               padding=0)
                                                #output_padding=1)
 
         self.dec_deconv_3 = nn.ConvTranspose2d(in_channels=16,
                                                out_channels=img_channels,
-                                               kernel_size=(6, 6),
-                                               stride=(3, 3),
-                                               padding=4)
+                                               kernel_size=(4, 4),
+                                               stride=(2, 2),
+                                               padding=0)
 
     def decoder(self, encoded):
         x = self.dec_linear_1(encoded)
-        x = x.view(-1, 64, 2, 2)
+        x = x.view(-1, 64, 3, 3)
         #print('dec_linear_1 out:', x.size())
 
         x = self.dec_deconv_1(x)
