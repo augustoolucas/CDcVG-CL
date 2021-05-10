@@ -1,13 +1,3 @@
-# Author: Ghada Sokar et al.
-# This is the implementation for the Learning Invariant Representation for Continual Learning paper in AAAI workshop on Meta-Learning for Computer Vision
-# if you use part of this code, please cite the following article:
-# @inproceedings{sokar2021learning,
-#       title={Learning Invariant Representation for Continual Learning}, 
-#       author={Ghada Sokar and Decebal Constantin Mocanu and Mykola Pechenizkiy},
-#       booktitle={Meta-Learning for Computer Vision Workshop at the 35th AAAI Conference on Artificial Intelligence (AAAI-21)},
-#       year={2021},
-# }  
-
 import argparse
 import glob
 import os
@@ -47,6 +37,14 @@ def parse_args():
     parser.add_argument('--n_hidden_specific', type=int, default=20, help='number of hidden units in the specific module')
     parser.add_argument('--n_hidden_classifier', type=int, default=40, help='number of hidden units in the classification module')
     
+    parser.add_argument('--n_layers_classifier', type=int, default=2)
+    parser.add_argument('--n_layers_cvae', type=int, default=2)
+    parser.add_argument('--n_layers_specific', type=int, default=2)
+    parser.add_argument('--layer_size_classifier', type=int, default=40)
+    parser.add_argument('--layer_size_cvae', type=int, default=40)
+    parser.add_argument('--classifier_lr', type=float, default=1e-3)
+    parser.add_argument('--cvae_lr', type=float, default=1e-3)
+
     # training parameters
     parser.add_argument('--learn_rate', type=float, default=1e-2, help='learning rate for Adam optimizer')
     parser.add_argument('--num_epochs', type=int, default=5, help='the number of epochs to run')
@@ -66,6 +64,7 @@ def parse_args():
     parser.add_argument('--n_img_y', type=int, default=8,
                         help='number of images along y-axis')
 
+    parser.add_argument('--optuna', type=str, default='False')
 
     return check_args(parser.parse_args())
 
@@ -241,7 +240,7 @@ def evaluate(encoder, classifier, task_id, device, task_test_loader, path, final
     print('Test evaluation of task_id: {} ACC: {}/{} ({:.3f}%)'.format(
          task_id, correct_class, n, 100*correct_class/float(n)))  
 
-    if not final_tests:
+    if not final_tests and args.optuna ==  'True':
         if 100*correct_class/float(n) < 80:
             print('Task accuracy too low, prunning trial.')
             raise optuna.exceptions.TrialPruned()
@@ -336,7 +335,7 @@ def train(num_epochs, n_classes, latent_dim, batch_size, optimizer_cvae, optimiz
 
     return test_acc
 
-def main(trial, experiment_path):
+def main(experiment_path=None, trial=None):
     # set seed
     torch.manual_seed(args.seed)
     os.environ['PYTHONHASHSEED'] = str(args.seed)
@@ -355,6 +354,7 @@ def main(trial, experiment_path):
         img_shape = tuple([1] + list(img_shape))
 
     n_classes = len(set(train_dataset.targets.tolist()))
+    print('Num classes:', n_classes)
     task_labels = [[x, y] for x, y in zip(range(0, n_classes, 2), range(1, n_classes, 2))]
     if not n_classes % 2 == 0:
         task_labels.append([args.n_classes - 1])
@@ -365,22 +365,43 @@ def main(trial, experiment_path):
                                                                train_dataset,
                                                                test_dataset)
     
-    latent_dim = trial.suggest_int('latent_dim', 16, 64, 16)
+    if trial:
+        latent_dim = trial.suggest_int('latent_dim', 16, 64, 16)
 
-    specific_representation_size = trial.suggest_int('specific_representation_size',
-                                                     10, 60, 10)
+        specific_representation_size = trial.suggest_int('specific_representation_size',
+                                                         10, 60, 10)
 
-    n_layers_classifier = trial.suggest_int('num_layers_classifier',
-                                                   1, 3, 1)
-    layer_size_classifier = trial.suggest_int('max_layer_size_classifier',
-                                                  20, 80, 10)
-    results_path = f'{experiment_path}/Trial {trial.number}'
+        n_layers_classifier = trial.suggest_int('num_layers_classifier',
+                                                       1, 3, 1)
+        layer_size_classifier = trial.suggest_int('max_layer_size_classifier',
+                                                      20, 80, 10)
+        results_path = f'{experiment_path}/Trial {trial.number}'
+
+        cvae_lr = trial.suggest_loguniform('cvae_learning_rate', 1e-5, 1e-2)
+        classifier_lr = trial.suggest_loguniform('classifier_learning_rate', 1e-5, 1e-2)
+        train_batch_size = trial.suggest_int('train_batch_size', 64, 512, 64)
+        num_epochs = trial.suggest_int('num_epochs', 5, 500, 5)
+    else:
+        latent_dim = args.latent_dim
+        specific_representation_size = args.n_hidden_specific
+        n_layers_classifier = args.n_layers_classifier
+        layer_size_classifier = args.layer_size_classifier
+        results_path = args.results_path
+        cvae_lr = args.cvae_lr
+        classifier_lr = args.classifier_lr
+        train_batch_size = args.batch_size
+        num_epochs = args.num_epochs
+
     check_path(results_path)
     ## MODEL ## 
     # Initialize encoder, decoder, specific, and classifier
     if args.cvae_model == 'mlp':
-        n_layers_cvae = trial.suggest_int('num_layers_cvae', 1, 3, 1)
-        layer_size_cvae = trial.suggest_int('max_layer_size_cvae', 300, 600, 100)
+        if trial:
+            n_layers_cvae = trial.suggest_int('num_layers_cvae', 1, 3, 1)
+            layer_size_cvae = trial.suggest_int('max_layer_size_cvae', 300, 600, 100)
+        else:
+            n_layers_cvae = args.n_layers_cvae
+            layer_size_cvae = args.layer_size_cvae
 
         encoder = Encoder(img_shape, layer_size_cvae, latent_dim, 
                           n_layers_cvae).to(device)
@@ -394,7 +415,11 @@ def main(trial, experiment_path):
         exit()
 
     if args.specific_model == 'mlp':
-        n_layers_specific = trial.suggest_int('num_layers_specific', 1, 3, 1)
+        if trial:
+            n_layers_specific = trial.suggest_int('num_layers_specific', 1, 3, 1)
+        else:
+            n_layers_specific = args.n_layers_specific
+
         classifier = Classifier(img_shape, latent_dim,
                                 specific_representation_size,
                                 layer_size_classifier,
@@ -408,9 +433,7 @@ def main(trial, experiment_path):
     else:
         print(f'Invalid specific_model argument: {args.specific_model}')
         exit()
-    
-    cvae_lr = trial.suggest_loguniform('cvae_learning_rate', 1e-5, 1e-2)
-    classifier_lr = trial.suggest_loguniform('classifier_learning_rate', 1e-5, 1e-2)
+
     ## OPTIMIZERS ##
     optimizer_cvae = torch.optim.Adam(itertools.chain(encoder.parameters(), decoder.parameters()), lr=cvae_lr)
     optimizer_C = torch.optim.Adam(classifier.parameters(), lr=classifier_lr)
@@ -433,17 +456,19 @@ def main(trial, experiment_path):
     #----- Train the sequence of CL tasks -----#
     #----------------------------------------------------------------------#
 
-    train_batch_size = trial.suggest_int('train_batch_size', 64, 512, 64)
-    num_epochs = trial.suggest_int('num_epochs', 5, 500, 5)
 
-    print(trial.params)
+    if trial:
+        print(trial.params)
+    else:
+        print(args)
+
     for task_id in range(num_tasks):
         torch.cuda.empty_cache()
         print("Strat training task#" + str(task_id))
         sys.stdout.flush()
         if task_id > 0:            
             # generate pseudo-samples of previous tasks
-            gen_x,gen_y = generate_pseudo_samples(device, task_id, latent_dim, task_labels, decoder, num_replayed, args.n_classes)
+            gen_x,gen_y = generate_pseudo_samples(device, task_id, latent_dim, task_labels, decoder, num_replayed, n_classes)
 
             if gen_x.shape[1] == 3:
                 gen_x = gen_x.reshape([gen_x.shape[0], img_shape[1],img_shape[2], img_shape[0]])
@@ -524,24 +549,25 @@ def main(trial, experiment_path):
     print('Average accuracy in task agnostic inference (ACC):  {:.3f}'.format(ACC))
     print('Average backward transfer (BWT): {:.3f}'.format(BWT))
 
-    with mlflow.start_run():
-        mlflow.log_param('Trial', trial.number)
-        for k, v in trial.params.items():
-            mlflow.log_param(k, v)
+    if trial:
+        with mlflow.start_run():
+            mlflow.log_param('Trial', trial.number)
+            for k, v in trial.params.items():
+                mlflow.log_param(k, v)
 
-        mlflow.log_param('Image_Shape', img_shape)
-        mlflow.log_param('CVAE_Model', args.cvae_model)
-        mlflow.log_param('Specific_Model', args.specific_model)
+            mlflow.log_param('Image_Shape', img_shape)
+            mlflow.log_param('CVAE_Model', args.cvae_model)
+            mlflow.log_param('Specific_Model', args.specific_model)
 
-        for idx, v in enumerate(test_accs):
-            mlflow.log_metric(f'Acc Task {idx}', v)
+            for idx, v in enumerate(test_accs):
+                mlflow.log_metric(f'Acc Task {idx}', v)
 
-        mlflow.log_metric('Avg Acc', ACC)
+            mlflow.log_metric('Avg Acc', ACC)
 
     return ACC
 
 
-if __name__ == '__main__':
+def optuna():
     experiment_name = f'{args.cvae_model}_cvae_{args.specific_model}_specific'
     experiment_path = f'./Optuna/{experiment_name}'
     OPTUNA_DUMP = f'{experiment_name}.pkl'
@@ -562,5 +588,12 @@ if __name__ == '__main__':
                                     direction='maximize')
 
     mlflow.set_experiment(experiment_name=experiment_name)
-    study.optimize(lambda trial: main(trial, experiment_path), n_trials=25, n_jobs=1)
+    study.optimize(lambda trial: main(experiment_path, trial), n_trials=25, n_jobs=1)
     joblib.dump(study, f'./{experiment_path}/{OPTUNA_DUMP}')
+
+
+if __name__ == '__main__':
+    if args.optuna == 'True':
+        optuna()
+    elif args.optuna == 'False':
+        main()
