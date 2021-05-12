@@ -64,7 +64,7 @@ def parse_args():
     parser.add_argument('--n_img_y', type=int, default=8,
                         help='number of images along y-axis')
 
-    parser.add_argument('--optuna', type=str, default='False')
+    parser.add_argument('--optuna', action='store_true', default=False)
 
     return check_args(parser.parse_args())
 
@@ -372,9 +372,9 @@ def main(experiment_path=None, trial=None):
                                                          10, 60, 10)
 
         n_layers_classifier = trial.suggest_int('num_layers_classifier',
-                                                       1, 3, 1)
+                                                1, 3, 1)
         layer_size_classifier = trial.suggest_int('max_layer_size_classifier',
-                                                      20, 80, 10)
+                                                  20, 80, 10)
         results_path = f'{experiment_path}/Trial {trial.number}'
 
         cvae_lr = trial.suggest_loguniform('cvae_learning_rate', 1e-5, 1e-2)
@@ -567,7 +567,7 @@ def main(experiment_path=None, trial=None):
     return ACC
 
 
-def optuna():
+def run_optuna():
     experiment_name = f'{args.cvae_model}_cvae_{args.specific_model}_specific'
     experiment_path = f'./Optuna/{experiment_name}'
     OPTUNA_DUMP = f'{experiment_name}.pkl'
@@ -593,7 +593,7 @@ def optuna():
 
 
 if __name__ == '__main__':
-    if args.optuna == 'True':
-        optuna()
-    elif args.optuna == 'False':
+    if args.optuna:
+        run_optuna()
+    else:
         main()
