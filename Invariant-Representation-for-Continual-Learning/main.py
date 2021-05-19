@@ -351,7 +351,7 @@ def main(experiment_path=None, trial=None):
     img_shape = tuple(train_dataset.data.shape[1:])
 
     if len(img_shape) == 2:
-        img_shape = tuple([1] + list(img_shape))
+        img_shape = tuple(list(img_shape) + [1])
 
     n_classes = len(set(train_dataset.targets.tolist()))
     print('Num classes:', n_classes)
