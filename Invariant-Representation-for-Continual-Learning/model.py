@@ -123,9 +123,9 @@ class ConvDecoder(nn.Module):
         return self.decoder(encoded)
 
 
-class Encoder(nn.Module):
+class MLP_Encoder(nn.Module):
     def __init__(self, img_shape, n_hidden, latent_dim, n_layers=1):
-        super(Encoder, self).__init__()
+        super(MLP_Encoder, self).__init__()
 
         self.model = nn.Sequential()
 
@@ -154,7 +154,7 @@ class Encoder(nn.Module):
         return z, mu, logvar
 
 
-class Decoder(nn.Module):
+class MLP_Decoder(nn.Module):
     def __init__(self,
                  img_shape,
                  layer_size,
@@ -162,7 +162,7 @@ class Decoder(nn.Module):
                  n_classes,
                  use_label=True,
                  n_layers=1):
-        super(Decoder, self).__init__()
+        super(MLP_Decoder, self).__init__()
         # conditional generation
         if use_label:
             input_dim = latent_dim + n_classes
@@ -191,200 +191,6 @@ class Decoder(nn.Module):
         img_flat = self.model(z)
         img = img_flat.view(img_flat.shape[0], *self.img_shape)
         return img
-
-
-class ResidualBlock(nn.Module):
-    """A simple residual block."""
-
-    def __init__(self, n_channels, hidden_channels):
-        """Initializes a new ResidualBlock instance.
-        Args:
-            n_channels: Number of input and output channels.
-            hidden_channels: Number of hidden channels.
-        """
-        super().__init__()
-        self._net = nn.Sequential(
-            nn.ReLU(),
-            nn.Conv2d(
-                in_channels=n_channels,
-                out_channels=hidden_channels,
-                kernel_size=3,
-                padding=1,
-            ),
-            nn.ReLU(),
-            nn.Conv2d(
-                in_channels=hidden_channels, out_channels=n_channels, kernel_size=1
-            ),
-        )
-
-    def forward(self, x):
-        return x + self._net(x)
-
-
-class ResidualStack(nn.Module):
-    """A stack of multiple ResidualBlocks."""
-
-    def __init__(self, n_channels, hidden_channels, n_residual_blocks=1):
-        """Initializes a new ResidualStack instance.
-        Args:
-            n_channels: Number of input and output channels.
-            hidden_channels: Number of hidden channels.
-            n_residual_blocks: Number of residual blocks in the stack.
-        """
-        super().__init__()
-        self._net = nn.Sequential(
-            *[
-                ResidualBlock(n_channels, hidden_channels)
-                for _ in range(n_residual_blocks)
-            ]
-            + [nn.ReLU()]
-        )
-
-    def forward(self, x):
-        return self._net(x)
-
-
-class VQVAE_Encoder(nn.Module):
-    """A feedforward encoder which downsamples its input."""
-
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        hidden_channels,
-        n_residual_blocks,
-        residual_channels,
-        stride,
-        num_latent,
-    ):
-        """Initializes a new Encoder instance.
-        Args:
-            in_channels: Number of input channels.
-            out_channels: Number of output channels.
-            hidden_channels: Number of channels in non residual block hidden layers.
-            n_residual_blocks: Number of residual blocks in each residual stack.
-            residual_channels: Number of hidden channels in residual blocks.
-            stride: Stride to use in the downsampling convolutions. Must be even.
-        """
-        super().__init__()
-        assert stride % 2 == 0, '"stride" must be even.'
-
-        net = []
-        for i in range(stride // 2):
-            first, last = 0, stride // 2 - 1
-            in_c = in_channels if i == first else hidden_channels // 2
-            out_c = hidden_channels // 2 if i < last else hidden_channels
-            net.append(
-                nn.Conv2d(
-                    in_channels=in_c,
-                    out_channels=out_c,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                )
-            )
-            net.append(nn.ReLU())
-
-        if n_residual_blocks > 0:
-            net.append(
-                ResidualStack(
-                    n_channels=hidden_channels,
-                    hidden_channels=residual_channels,
-                    n_residual_blocks=n_residual_blocks,
-                )
-            )
-
-        net.append(
-            nn.Conv2d(
-                in_channels=hidden_channels,
-                out_channels=out_channels,
-                kernel_size=3,
-                padding=1,
-            )
-        )
-        self._net = nn.Sequential(*net)
-
-        self.z_mean = nn.Linear(10*8*8, num_latent)
-        self.z_log_var = nn.Linear(10*8*8, num_latent)
-
-    def reparameterize(self, z_mu, z_log_var):
-        eps = torch.randn(z_mu.size(0), z_mu.size(1)).to(device)
-        z = z_mu + eps * torch.exp(z_log_var/2.).to(device)
-        return z
-
-    def forward(self, x):
-        x = self._net(x)
-
-        z_mean = self.z_mean(x.view(-1, np.prod(x.size()[1:])))
-        z_log_var = self.z_log_var(x.view(-1, np.prod(x.size()[1:])))
-        encoded = self.reparameterize(z_mean, z_log_var)
-
-        return encoded, z_mean, z_log_var
-
-
-class VQVAE_Decoder(nn.Module):
-    """A feedforward encoder which upsamples its input."""
-
-    def __init__(
-        self,
-        input_size,
-        in_channels,
-        out_channels,
-        hidden_channels,
-        n_residual_blocks,
-        residual_channels,
-        stride,
-    ):
-        """Initializes a new Decoder instance.
-        Args:
-            in_channels: Number of input channels.
-            out_channels: Number of output channels.
-            hidden_channels: Number of channels in (non residual block) hidden layers.
-            n_residual_blocks: Number of residual blocks in each residual stack.
-            residual_channels: Number of hidden channels in residual blocks.
-            stride: Stride to use in the upsampling (i.e. transpose) convolutions. Must
-                be even.
-        """
-        super().__init__()
-
-        assert stride % 2 == 0, '"stride" must be even.'
-
-        net = [
-            nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=hidden_channels,
-                kernel_size=3,
-                padding=1,
-            ),
-            ResidualStack(
-                n_channels=hidden_channels,
-                hidden_channels=residual_channels,
-                n_residual_blocks=n_residual_blocks,
-            ),
-        ]
-        for i in range(stride // 2):
-            first, last = 0, stride // 2 - 1
-            in_c = hidden_channels if i == first else hidden_channels // 2
-            out_c = hidden_channels // 2 if i < last else out_channels
-            net.append(
-                nn.ConvTranspose2d(
-                    in_channels=in_c,
-                    out_channels=out_c,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                )
-            )
-            if i < last:
-                net.append(nn.ReLU())
-        self._net = nn.Sequential(*net)
-
-        self.linear = nn.Linear(input_size, 10*8*8)
-
-    def forward(self, x):
-        x = self.linear(x)
-        x = x.view(-1, 10, 8, 8)
-        return self._net(x)
 
 
 class ConvClassifier(nn.Module):
