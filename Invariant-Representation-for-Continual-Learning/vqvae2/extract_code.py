@@ -58,7 +58,7 @@ if __name__ == '__main__':
     dataset = datasets.CIFAR10(args.path, transform=transform, download=True)
     loader = DataLoader(dataset, batch_size=128, shuffle=False, num_workers=4)
 
-    model = VQVAE()
+    model = VQVAE(embed_dim=64, n_embed=256)
     model.load_state_dict(torch.load(args.ckpt))
     model = model.to(device)
     model.eval()

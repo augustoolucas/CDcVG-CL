@@ -32,7 +32,7 @@ def load_model(model, checkpoint, device):
         args = ckpt['args']
 
     if model == 'vqvae':
-        model = VQVAE()
+        model = VQVAE(embed_dim=64, n_embed=256)
 
     elif model == 'pixelsnail_top':
         model = PixelSNAIL(
@@ -76,7 +76,7 @@ if __name__ == '__main__':
     device = 'cuda'
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch', type=int, default=8)
+    parser.add_argument('--batch', type=int, default=10)
     parser.add_argument('--vqvae', type=str)
     parser.add_argument('--top', type=str)
     parser.add_argument('--bottom', type=str)
@@ -94,7 +94,10 @@ if __name__ == '__main__':
         model_bottom, device, args.batch, [8, 8], args.temp, condition=top_sample
     )
 
-    decoded_sample = model_vqvae.decode_code(top_sample, bottom_sample)
+    labels = list(range(10))
+    labels = torch.tensor(labels, device=device).type(torch.LongTensor)
+
+    decoded_sample = model_vqvae.decode_code(top_sample, bottom_sample, labels)
     decoded_sample = decoded_sample.clamp(-1, 1)
 
     save_image(decoded_sample, args.filename, normalize=True, range=(-1, 1))

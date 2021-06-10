@@ -1,8 +1,13 @@
 import torch
+import numpy as np
 from torch import nn
 from torch.nn import functional as F
 
-import distributed as dist_fn
+try:
+    from . import distributed as dist_fn
+except ImportError:
+    import distributed as dist_fn
+
 
 
 # Copyright 2018 The Sonnet Authors. All Rights Reserved.
@@ -82,9 +87,9 @@ class ResBlock(nn.Module):
         super().__init__()
 
         self.conv = nn.Sequential(
-            nn.ReLU(),
+            nn.ELU(),
             nn.Conv2d(in_channel, channel, 3, padding=1),
-            nn.ReLU(inplace=True),
+            nn.ELU(inplace=True),
             nn.Conv2d(channel, in_channel, 1),
         )
 
@@ -102,23 +107,23 @@ class Encoder(nn.Module):
         if stride == 4:
             blocks = [
                 nn.Conv2d(in_channel, channel // 2, 4, stride=2, padding=1),
-                nn.ReLU(inplace=True),
+                nn.ELU(inplace=True),
                 nn.Conv2d(channel // 2, channel, 4, stride=2, padding=1),
-                nn.ReLU(inplace=True),
+                nn.ELU(inplace=True),
                 nn.Conv2d(channel, channel, 3, padding=1),
             ]
 
         elif stride == 2:
             blocks = [
                 nn.Conv2d(in_channel, channel // 2, 4, stride=2, padding=1),
-                nn.ReLU(inplace=True),
+                nn.ELU(inplace=True),
                 nn.Conv2d(channel // 2, channel, 3, padding=1),
             ]
 
         for i in range(n_res_block):
             blocks.append(ResBlock(channel, n_res_channel))
 
-        blocks.append(nn.ReLU(inplace=True))
+        blocks.append(nn.ELU(inplace=True))
 
         self.blocks = nn.Sequential(*blocks)
 
@@ -137,13 +142,13 @@ class Decoder(nn.Module):
         for i in range(n_res_block):
             blocks.append(ResBlock(channel, n_res_channel))
 
-        blocks.append(nn.ReLU(inplace=True))
+        blocks.append(nn.ELU(inplace=True))
 
         if stride == 4:
             blocks.extend(
                 [
                     nn.ConvTranspose2d(channel, channel // 2, 4, stride=2, padding=1),
-                    nn.ReLU(inplace=True),
+                    nn.ELU(inplace=True),
                     nn.ConvTranspose2d(
                         channel // 2, out_channel, 4, stride=2, padding=1
                     ),
@@ -154,6 +159,7 @@ class Decoder(nn.Module):
             blocks.append(
                 nn.ConvTranspose2d(channel, out_channel, 4, stride=2, padding=1)
             )
+            blocks.append(nn.ELU(inplace=True))
 
         self.blocks = nn.Sequential(*blocks)
 
@@ -187,7 +193,7 @@ class VQVAE(nn.Module):
             embed_dim, embed_dim, 4, stride=2, padding=1
         )
         self.dec = Decoder(
-            embed_dim + embed_dim,
+            embed_dim + embed_dim + 16,
             in_channel,
             channel,
             n_res_block,
@@ -195,11 +201,12 @@ class VQVAE(nn.Module):
             stride=4,
         )
 
-    def forward(self, input):
+    def forward(self, input, label=None):
         quant_t, quant_b, diff, _, _ = self.encode(input)
-        dec = self.decode(quant_t, quant_b)
+        dec = self.decode(quant_t, quant_b, label)
 
         return dec, diff
+
 
     def encode(self, input):
         enc_b = self.enc_b(input)
@@ -220,19 +227,45 @@ class VQVAE(nn.Module):
 
         return quant_t, quant_b, diff_t + diff_b, id_t, id_b
 
-    def decode(self, quant_t, quant_b):
+    def encode_label(self, n_bits, labels):
+        if len(list(bin(max(labels)))) - 2 > n_bits:
+            print(f'Impossible to encode {max(labels)} on {n_bits} bits.')
+            exit()
+
+        bin_labels = np.empty((0, 8, 8))
+
+        for label in labels:
+            bin_label = list(bin(label))
+            del bin_label[:2]
+            bin_label = list(map(int, bin_label))
+            bin_label = [0] * (n_bits - len(bin_label)) + bin_label
+
+            bin_label = np.broadcast_to(np.array(bin_label), (1, n_bits, n_bits))
+            bin_labels = np.concatenate([bin_labels, bin_label])
+
+        bin_labels = bin_labels.reshape(len(labels), 1, n_bits, n_bits)
+        return torch.from_numpy(bin_labels).type(torch.FloatTensor)
+
+    def decode(self, quant_t, quant_b, label=None):
         upsample_t = self.upsample_t(quant_t)
         quant = torch.cat([upsample_t, quant_b], 1)
+
+        if label != None:
+            bin_labels = self.encode_label(upsample_t.shape[-1], label).to('cuda')
+
+            for i in range(16):
+                quant = torch.cat([quant, bin_labels], 1)
+
         dec = self.dec(quant)
 
         return dec
 
-    def decode_code(self, code_t, code_b):
+    def decode_code(self, code_t, code_b, label=None):
         quant_t = self.quantize_t.embed_code(code_t)
         quant_t = quant_t.permute(0, 3, 1, 2)
         quant_b = self.quantize_b.embed_code(code_b)
         quant_b = quant_b.permute(0, 3, 1, 2)
 
-        dec = self.decode(quant_t, quant_b)
+        dec = self.decode(quant_t, quant_b, label)
 
         return dec

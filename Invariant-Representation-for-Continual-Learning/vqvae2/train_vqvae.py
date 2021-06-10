@@ -8,6 +8,12 @@ from torch.utils.data import DataLoader
 
 from torchvision import datasets, transforms, utils
 
+try:
+    from apex import amp
+
+except ImportError:
+    amp = None
+
 from tqdm import tqdm
 
 from vqvae import VQVAE
@@ -32,9 +38,9 @@ def train(epoch, loader, model, optimizer, scheduler, device):
 
         img = img.to(device)
 
-        out, latent_loss = model(img)
-        recon_loss = criterion(out, img)
-        latent_loss = latent_loss.mean()
+        out, latent_loss = model(img, label)
+        recon_loss = criterion(out, img).float()
+        latent_loss = latent_loss.float().mean()
         loss = recon_loss + latent_loss_weight * latent_loss
         loss.backward()
 
@@ -62,13 +68,14 @@ def train(epoch, loader, model, optimizer, scheduler, device):
                 )
             )
 
-            if i % 100 == 0:
+            if i % 300 == 0:
                 model.eval()
 
                 sample = img[:sample_size]
+                label_sample = label[:sample_size]
 
                 with torch.no_grad():
-                    out, _ = model(sample)
+                    out, _ = model(sample, label_sample)
 
                 utils.save_image(
                     torch.cat([sample, out], 0),
@@ -95,14 +102,14 @@ def main(args):
         ]
     )
 
-    # dataset = datasets.ImageFolder(args.path, transform=transform)
+    #dataset = datasets.ImageFolder(args.path, transform=transform)
     dataset = datasets.CIFAR10(args.path, transform=transform, download=True)
     sampler = dist.data_sampler(dataset, shuffle=True, distributed=args.distributed)
     loader = DataLoader(
         dataset, batch_size=128 // args.n_gpu, sampler=sampler, num_workers=2
     )
 
-    model = VQVAE().to(device)
+    model = VQVAE(embed_dim=64, n_embed=256).to(device)
 
     if args.distributed:
         model = nn.parallel.DistributedDataParallel(
@@ -112,6 +119,11 @@ def main(args):
         )
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    #optimizer = optim.SGD(model.parameters(), lr=args.lr)
+
+    if amp is not None:
+        model, optimizer = amp.initialize(model, optimizer, opt_level=args.amp)
+
     scheduler = None
     if args.sched == "cycle":
         scheduler = CycleScheduler(
@@ -126,7 +138,8 @@ def main(args):
         train(i, loader, model, optimizer, scheduler, device)
 
         if dist.is_primary():
-            torch.save(model.state_dict(), f"checkpoint/vqvae_{str(i + 1).zfill(3)}.pt")
+            if (i+1) % 10 == 0:
+                torch.save(model.state_dict(), f"checkpoint/vqvae_{str(i + 1).zfill(3)}.pt")
 
 
 if __name__ == "__main__":
@@ -145,6 +158,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--sched", type=str)
     parser.add_argument("--path", type=str, default='data')
+    parser.add_argument('--amp', type=str, default='O0')
 
     args = parser.parse_args()
 
