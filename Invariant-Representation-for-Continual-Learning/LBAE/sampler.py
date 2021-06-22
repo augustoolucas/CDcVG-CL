@@ -7,9 +7,15 @@ __license__= "MIT License"
 
 import sys
 import os
+import time
 import numpy as np
 import numpy.linalg as la
 import pickle
+import mkl
+import scipy
+import torch
+import scipy.linalg as sla
+mkl.set_num_threads(10)
 
 EPSILON = 1e-6
 rnd_seed = 12345
@@ -48,7 +54,7 @@ def nearestPD(A):
     """
 
     B = (A + A.T) / 2
-    _, s, V = la.svd(B)
+    _, s, V = sla.svd(B)
 
     H = np.dot(V.T, np.dot(np.diag(s), V))
     A2 = (B + H) / 2
@@ -58,7 +64,7 @@ def nearestPD(A):
     if L is not None:
         return A3, L
 
-    print("Still H is not PSD, fixing it...")
+    #print("Still H is not PSD, fixing it...")
     spacing = np.spacing(la.norm(A))
     # The above is different from [1]. It appears that MATLAB's `chol` Cholesky
     # decomposition will accept matrixes with exactly 0-eigenvalue, whereas
@@ -76,12 +82,13 @@ def nearestPD(A):
         if L is not None:
             break
 
-        print("Increasing eigen values...")
-        mineig = np.min(np.real(la.eigvals(A3)))
+        #print("Increasing eigen values...")
+        eval = sla.eigvalsh(A3) if (A3 == A3.T).all() else sla.eigvals(A3)
+        mineig = np.min(np.real(eval))
         A3 += I * (-mineig * k**2 + spacing)
         k += 1
 
-    print("H is PSD now")
+    #print("H is PSD now")
     return A3, L
 
 #-------------------------------------------------------------------------------
@@ -94,7 +101,7 @@ def chol(B):
 
 #--------------------------------------------------------------------
 def get_covb(z):
-    print("Zeros in latents: ",(z.sum(0) == 0).sum())
+    #print("Zeros in latents: ",(z.sum(0) == 0).sum())
     n = z.shape[0]
     x = z
     if z.min() == 0 and z.max() == 1:
@@ -104,27 +111,28 @@ def get_covb(z):
     p = (xmu+1)/2
 
     D = (x.T @ x)/n
-    if chol(D) is not None:
-        print("D is PSD")
+    #if chol(D) is not None:
+        #print("D is PSD")
 
     G = D
     G = np.vstack([D, xmu])
     G = np.hstack([G, np.append(xmu, [1])[:,None]])
         
-    if chol(G) is not None:
-        print("G is PSD")
+    #if chol(G) is not None:
+        #print("G is PSD")
 
     H = G
     H = np.sin(G * np.pi/2)
     L = chol(H)
-    eval, evec = la.eig(H)
+    #eval, evec = la.eig(H)
+    eval = sla.eigvalsh(H) if (H == H.T).all() else sla.eigvals(H)
 
     if L is None:
-        print("*** H is  NOT PSD")
-        print("Neg evals:", (eval<0).sum()," min eval:", eval.min())
+        #print("*** H is  NOT PSD")
+        #print("Neg evals:", (eval<0).sum()," min eval:", eval.min())
         Hs = H 
         H,L = nearestPD(H)
-        print("H  diff:", np.abs(Hs-H).sum())
+        #print("H  diff:", np.abs(Hs-H).sum())
     else:
         print("OK - H IS PSD")
 
