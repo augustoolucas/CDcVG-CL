@@ -10,11 +10,15 @@ import sys
 import glob
 import pickle
 import torchvision
+import time
 from torchvision import transforms
 import torch
 import numpy as np
 import torch.nn as nn
+import matplotlib.pyplot as plt
 from torchsummary import summary
+from tqdm import tqdm
+from sklearn.metrics import accuracy_score
 
 from mllogger import *
 from datasets import CIFAR10Ex, CelebAEx, MNISTEx
@@ -182,7 +186,7 @@ class Solver():
                     batch_size=int(self.hps.batch_size_test),
                     shuffle=False, num_workers=8, drop_last=False, pin_memory=True)
 
-            
+
         self.logr.set_samples_num('Train', len(self.train_dataloader.dataset))
         if self.test_dataloader is not None:
             self.logr.set_samples_num('Eval', len(self.test_dataloader.dataset))
@@ -197,6 +201,8 @@ class Solver():
 
         self.E = None
         self.G = None
+        self.Classifier = Classifier().to('cuda')
+        self.Discriminator = Discriminator().to('cuda')
 
         # Select model by model name
         if self.hps.vae_model is not None:
@@ -237,8 +243,9 @@ class Solver():
             self.G = nn.DataParallel(self.G)
 
         if self.G is not None and self.E is not None:
-            params = list(self.E.parameters()) + list(self.G.parameters())
-            self.optim = torch.optim.Adam(params = params , lr=self.hps.lr[0], weight_decay=self.hps.l2 )
+            params = list(self.E.parameters()) + list(self.G.parameters()) + list(self.Classifier.parameters()) + list(self.Discriminator.parameters())
+            self.optim = torch.optim.Adam(params=params , lr=self.hps.lr[0], weight_decay=self.hps.l2 )
+            #self.cls_optim = torch.optim.Adam(params=self.Classifier.parameters(), lr=self.hps.lr[0])
 
         z_static = torch.randn(self.hps.batch_size, self.hps.zsize)
         if self.hps.use_cuda:
@@ -269,15 +276,32 @@ class Solver():
         print("Starting training from epoch=",start_from_epoch,"  iter=",iter)
 
         mse = nn.MSELoss(reduction='sum')
+        classifier_loss = nn.CrossEntropyLoss()
+        discriminator_loss = nn.BCELoss()
         self.zbuff = []
         self.zbuff_classes = []
         nsave_images=64
+        disc_loss = 0
+        acc_cls_real_list = []
+        acc_cls_recon_list = []
+        acc_cls_gen_list = []
+        reco_loss_list = []
+        cls_loss_list = []
         for e in range(start_from_epoch, self.hps.epochs_max):
+            start = time.time()
             self.logr.start_epoch('Train', e)
             if self.G is not None: self.G.train() 
             if self.E is not None: self.E.train() 
 
+            acc_cls_real = 0
+            acc_cls_recon = 0
+            acc_cls_gen = 0
+
+            acc_disc_real = 0
+            acc_disc_recon = 0
+            acc_disc_gen = 0
             for i, (x, target, xc) in enumerate(self.train_dataloader):
+                self.Classifier.train()
                 # Get code directly from the dataset - bypass caching 
                 batch_size = x.size(0)
                 iter += batch_size
@@ -301,10 +325,51 @@ class Solver():
                     if self.hps.shared_weights:
                         self.ws = self.E.layers
 
+                cls_loss = 0
+                y_cls = [ x[0] for x in target.tolist() ]
+                y_cls = torch.Tensor(y_cls).to('cuda').long()
+
+                prediction = self.Classifier(xc)
+                cls_loss = classifier_loss(prediction, y_cls)
+                prediction = torch.argmax(prediction, 1).cpu().numpy()
+                acc_cls_real += accuracy_score(prediction, y_cls.cpu().detach().numpy())
+
+                """
+                prediction = self.Discriminator(xc)
+                #y_disc = torch.Tensor([1]*xc.shape[0]).to('cuda').long()
+                prediction = prediction.reshape(xc.shape[0])
+                prediction = (prediction > 0.5).float()
+                y_disc = torch.ones((xc.shape[0])).to('cuda').float()
+                disc_loss = discriminator_loss(prediction, y_disc)
+                acc_disc_real += accuracy_score(prediction.cpu().detach().numpy(),
+                                                y_disc.cpu().detach().numpy())
+                """
+
+                #self.cls_optim.zero_grad()
+                #self.cls_optim.step()
+
+                #self.Classifier.eval()
+
                 # DECODE
                 if self.G is not None:
                     z = torch.cat((z, labels_onehot), dim=1)
                     xr = self.G(z, self.ws)
+
+                prediction = self.Classifier(xr)
+                cls_loss += classifier_loss(prediction, y_cls) * .25
+                prediction = torch.argmax(prediction, 1).cpu().numpy()
+                acc_cls_recon += accuracy_score(prediction, y_cls.cpu().detach().numpy())
+
+                """
+                prediction = self.Discriminator(xr)
+                #y_disc = torch.Tensor([-1]*x_out.shape[0]).to('cuda').long()
+                prediction = prediction.reshape(xc.shape[0])
+                prediction = (prediction > 0.5).float()
+                y_disc = torch.zeros((xc.shape[0])).to('cuda').float()
+                disc_loss += discriminator_loss(prediction, y_disc)
+                acc_disc_recon += accuracy_score(prediction.cpu().detach().numpy(),
+                                                 y_disc.cpu().detach().numpy())
+                """
 
                 # Calculate VAE loss
                 log_dic = {}
@@ -328,21 +393,75 @@ class Solver():
                         log_dic.update({'kld_loss': float(loss_kld)})
                         loss = loss + loss_kld
 
+                    S = [np.vstack(self.zbuff), np.vstack(self.zbuff_classes)]
+                    x_out, y_out = self.eval(at_epoch=e,
+                                             results_filename='eval_out.txt',
+                                             latents=S)
+
+                    prediction = self.Classifier(x_out)
+                    cls_loss += classifier_loss(prediction, y_out.long()) + .25
+                    prediction = torch.argmax(prediction, 1).cpu().numpy()
+                    acc_cls_gen += accuracy_score(prediction, y_out.cpu().detach().numpy())
+
+                    """
+                    prediction = self.Discriminator(x_out)
+                    prediction = prediction.reshape(xc.shape[0])
+                    prediction = (prediction > 0.5).float()
+                    #y_disc = torch.Tensor([-1]*x_out.shape[0]).to('cuda').long()
+                    y_disc = torch.zeros((xc.shape[0])).to('cuda').float()
+                    disc_loss += discriminator_loss(prediction, y_disc)
+                    acc_disc_gen += accuracy_score(prediction.cpu().detach().numpy(),
+                                                   y_disc.cpu().detach().numpy())
+
+                    loss = loss + cls_loss + disc_loss
+                    """
+
+                    loss = loss + cls_loss
+
                     self.optim.zero_grad() 
                     loss.backward()
                     self.optim.step()
 
 
+                if self.G is not None: self.G.train() 
+                if self.E is not None: self.E.train() 
                 # LOGGING
                 #=====================================
                 if self.G is not None and self.E is not None:
-                    log_dic.update({'loss': float(loss), 'reco_loss':float(loss_reco )} )
+                    log_dic.update({'loss': float(loss),
+                                    'reco_loss':float(loss_reco),
+                                    'cls_loss':float(cls_loss),
+                                    'disc_loss':float(disc_loss),
+                                    'acc_cls_real':float(acc_cls_real),
+                                    'acc_cls_recon':float(acc_cls_recon),
+                                    'acc_cls_gen':float(acc_cls_gen),
+                                    'acc_disc_real':float(acc_disc_real),
+                                    'acc_disc_recon':float(acc_disc_recon),
+                                    'acc_disc_gen':float(acc_disc_gen)})
 
                 self.logr.log_loss(e, iter, stage_name='Train', losses=log_dic)
 
                 if i % self.hps.print_every_batch == 0:
                     self.logr.print_batch_stat(stage_name='Train')
 
+            #print(f'Classifier Accuracy: {}')
+            acc_cls_real /= len(self.train_dataloader)
+            acc_cls_recon /= len(self.train_dataloader)
+            acc_cls_gen /= len(self.train_dataloader)
+
+            acc_cls_real_list.append(acc_cls_real)
+            acc_cls_recon_list.append(acc_cls_recon)
+            acc_cls_gen_list.append(acc_cls_gen)
+            reco_loss_list.append(loss_reco.item())
+            cls_loss_list.append(cls_loss.item())
+
+            """
+            acc_disc_real /= acc_disc_real/len(self.train_dataloader)
+            acc_disc_recon /= acc_disc_recon/len(self.train_dataloader)
+            acc_disc_gen /= acc_disc_gen/len(self.train_dataloader)
+            """
+
+            print(f'Epoch: {e} - Time: {time.time() - start}')
             self.logr.print_batch_stat('Train')
 
 
@@ -388,9 +507,28 @@ class Solver():
                 print('done')
 
             self.save_checkpoint(epoch=e, iter=iter, current_loss= loss_reco_avg)
+
+        fig = plt.figure()
+        plt.plot(range(len(acc_cls_real_list)), acc_cls_real_list, label='Acc Real Data')
+        plt.plot(range(len(acc_cls_recon_list)), acc_cls_recon_list, label='Acc Reconstructed Data')
+        plt.plot(range(len(acc_cls_gen_list)), acc_cls_gen_list, label='Acc Generated Data')
+        plt.ylim(0, 1)
+        plt.legend()
+        plt.savefig('cls_acc.png', dpi=300)
+
+        fig = plt.figure()
+        plt.plot(range(len(reco_loss_list)), reco_loss_list, label='Reconstruction Loss')
+        plt.legend()
+        plt.savefig('recon_loss.png', dpi=300)
+
+        fig = plt.figure()
+        plt.plot(range(len(cls_loss_list)), cls_loss_list, label='Classifier Loss')
+        plt.legend()
+        plt.savefig('cls_loss.png', dpi=300)
+
         return
 
-    def eval(self, at_epoch=0, results_filename=None): 
+    def eval(self, at_epoch=0, results_filename=None, latents=None): 
         nsave_images=64
         imgs_per_row=8
 
@@ -407,17 +545,22 @@ class Solver():
         torch.set_grad_enabled(False)
 
 
-        print("Generating samples("+self.hps.sample_method+"). N=",int(self.hps.gen_imgs), flush=True)
+        #print("Generating samples("+self.hps.sample_method+"). N=",int(self.hps.gen_imgs), flush=True)
 
         imgs_reco_dir = os.path.join(self.logr.exp_path, 'generated', 'samples_'+self.hps.sample_method)
-        os.system('rm '+imgs_reco_dir+'/*.jpg')
+        #os.system('rm '+imgs_reco_dir+'/*.jpg')
 
         if self.hps.sample_method in ['cov', 'int']:
             latents_file=self.logr.exp_path+'/latents-last.pk'
 
-            print('Loading latents from:',latents_file)
+            #print('Loading latents from:',latents_file)
             labels = []
-            d = pickle.load(open(latents_file, 'rb'))
+
+            if latents:
+                d = latents
+            else:
+                d = pickle.load(open(latents_file, 'rb'))
+
             if isinstance(d, list) and len(d) == 2:
                 d, labels = d
 
@@ -473,6 +616,7 @@ class Solver():
             labels = np.random.randint(10, size=z_static.shape[0])
             labels = torch.tensor(labels).type(torch.LongTensor).to('cuda')
             labels_onehot = torch.zeros(labels.shape[0], 10).to('cuda')
+            labels_out = labels_onehot
             labels_onehot.scatter_(1, labels.view(-1, 1).to('cuda'), 1)
             labels_onehot = (labels_onehot * 2) - 1
             labels_onehot = torch.cat([labels_onehot]*10, dim=1)
@@ -480,7 +624,7 @@ class Solver():
             xr  = self.G(z_static, None)
 
             tosave = int(self.hps.gen_imgs - (i)*xr.size(0))
-            save_images(xr[:tosave], self.hps.channels, self.hps.img_size, imgs_reco_dir, i*xr.size(0))
+            #save_images(xr[:tosave], self.hps.channels, self.hps.img_size, imgs_reco_dir, i*xr.size(0))
 
             name_suffix = self.hps.sample_method
             filename_img = self.logr.exp_path+'/generated/sample_'+str(at_epoch+i)+'_'+self.hps.sample_method
@@ -491,9 +635,10 @@ class Solver():
             filename_img += '.pk'
 
             xrp = xr[:nsave_images]
-            self.logr.log_images(xrp.cpu().detach(), at_epoch+i, 
-                    name_suffix, 'generated', 
-                    self.hps.channels, nrow=imgs_per_row) 
+            if latents is None:
+                self.logr.log_images(xrp.cpu().detach(), at_epoch+i, 
+                        name_suffix, 'generated', 
+                        self.hps.channels, nrow=imgs_per_row) 
 
             if tosave <= xr.size(0):
                 break
@@ -505,7 +650,7 @@ class Solver():
             with open(results_filename, 'wt') as f:
                 f.write('e:'+str(self.hps.epoch_start)+' loss_eval:'+str(self.current_best))
 
-        return
+        return xr, labels
 
     def eval_reconstruct(self, dataset=None, at_epoch=0, iter=0, results_filename=None): 
         nsave_images=64

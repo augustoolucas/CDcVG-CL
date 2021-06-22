@@ -65,20 +65,20 @@ def main():
 
 #=====================================================
     if 1 and hps.cfg == 'cifar10_bae':
-        hps.exp_suffix = 'm171-4'
+        hps.exp_suffix = 'classifier+discriminator'
         hps.dataset = 'cifar10'
         # hps.parallel = True
-        hps.epochs_max = 3000 
+        hps.epochs_max = 200
         hps.channels = 3
         hps.img_size= 32
         hps.batch_size = 512
-        hps.batch_size_test = 1024
+        hps.batch_size_test = 512
         hps.sample_method = 'cov'
-        hps.gen_imgs = 1000
+        hps.gen_imgs = 512
         hps.interpolate_steps = 10
         hps.vae_model = 'ConvResBlock32'
-        hps.lr[0] = 5e-4
-        hps.zsize = 1536
+        hps.lr[0] = 1e-3
+        hps.zsize = 768
 
 #=====================================================
     if 0 and hps.cfg == 'cifar10_bae':
@@ -90,10 +90,10 @@ def main():
         hps.epochs_max = 3000 
         hps.channels = 3
         hps.img_size= 32
-        hps.batch_size = 512
-        hps.batch_size_test = 1024
+        hps.batch_size = 768
+        hps.batch_size_test = 512
         hps.sample_method = 'cov'
-        hps.gen_imgs = 1000
+        hps.gen_imgs = 512
         hps.interpolate_steps = 10
         hps.vae_model = 'ConvResBlock32'
         # hps.vae_model = 'Net'

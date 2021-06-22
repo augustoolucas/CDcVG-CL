@@ -76,6 +76,45 @@ class BinDropout(nn.Module):
             return x
         return x
 
+class Classifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Sequential(nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),
+                                  nn.ELU(inplace=True),
+                                  nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+                                  nn.ELU(inplace=True))
+
+        self.linear = nn.Sequential(nn.Linear(2048, 512),
+                                    nn.ELU(inplace=True),
+                                    nn.Linear(512, 10),
+                                    nn.Softmax(dim=1))
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.linear(x.view(x.size(0), -1))
+
+        return x
+
+class Discriminator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Sequential(nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),
+                                  nn.ELU(inplace=True),
+                                  nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+                                  nn.ELU(inplace=True))
+
+        self.linear = nn.Sequential(nn.Linear(2048, 512),
+                                    nn.ELU(inplace=True),
+                                    nn.Linear(512, 1),
+                                    nn.Sigmoid())
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.linear(x.view(x.size(0), -1))
+
+        return x
+
+
 #===========================================================================================
 class EncConvResBlock32(nn.Module):
     def __init__(self, hps):
@@ -128,7 +167,7 @@ class EncConvResBlock32(nn.Module):
             #breakpoint()
 
         #self.act = nn.LeakyReLU(0.02)
-        self.act = nn.ELU()
+        self.act = nn.ELU(inplace=True)
         self.drop = None
 
     def forward(self, x):
@@ -238,7 +277,7 @@ class GenConvResBlock32(nn.Module):
         self.dc5 = nn.ConvTranspose2d(c, channels, kernel_size=3, stride=1, padding=1, bias=False)
 
         #self.act = nn.LeakyReLU(0.02)
-        self.act = nn.ELU()
+        self.act = nn.ELU(inplace=True)
         self.quant = QuantizerFunc.apply
 
         if self.hps.img_size == 64:
