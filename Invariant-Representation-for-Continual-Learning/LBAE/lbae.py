@@ -228,7 +228,7 @@ class Solver():
             net_info(self.G)
 
             summary(self.E.cuda(), (self.hps.channels, self.hps.img_size, self.hps.img_size))
-            summary(self.G.cuda(), (1,self.hps.zsize + 100))
+            summary(self.G.cuda(), (1,self.hps.zsize + 10))
         return
 
     def reparam_log(self, mu, logvar):
@@ -243,9 +243,10 @@ class Solver():
             self.G = nn.DataParallel(self.G)
 
         if self.G is not None and self.E is not None:
-            params = list(self.E.parameters()) + list(self.G.parameters()) + list(self.Classifier.parameters()) + list(self.Discriminator.parameters())
+            params = list(self.E.parameters()) + list(self.G.parameters())
             self.optim = torch.optim.Adam(params=params , lr=self.hps.lr[0], weight_decay=self.hps.l2 )
-            #self.cls_optim = torch.optim.Adam(params=self.Classifier.parameters(), lr=self.hps.lr[0])
+            self.optim_C = torch.optim.Adam(params=self.Classifier.parameters(), lr=self.hps.lr[0])
+            self.optim_D = torch.optim.Adam(params=self.Discriminator.parameters(), lr=self.hps.lr[0])
 
         z_static = torch.randn(self.hps.batch_size, self.hps.zsize)
         if self.hps.use_cuda:
@@ -281,27 +282,35 @@ class Solver():
         self.zbuff = []
         self.zbuff_classes = []
         nsave_images=64
-        disc_loss = 0
-        acc_cls_real_list = []
-        acc_cls_recon_list = []
-        acc_cls_gen_list = []
+
+        accC_real_list = []
+        accC_recon_list = []
+        accC_gen_list = []
+        accD_real_list = []
+        accD_recon_list = []
+        accD_gen_list = []
         reco_loss_list = []
         cls_loss_list = []
+        disc_loss_list = []
+        loss_list = []
+
         for e in range(start_from_epoch, self.hps.epochs_max):
             start = time.time()
             self.logr.start_epoch('Train', e)
             if self.G is not None: self.G.train() 
             if self.E is not None: self.E.train() 
+            self.Classifier.train()
+            self.Discriminator.train()
 
-            acc_cls_real = 0
-            acc_cls_recon = 0
-            acc_cls_gen = 0
+            accC_real = 0
+            accC_recon = 0
+            accC_gen = 0
+            accD_real = 0
+            accD_recon = 0
+            accD_gen = 0
+            epoch_loss = 0
 
-            acc_disc_real = 0
-            acc_disc_recon = 0
-            acc_disc_gen = 0
             for i, (x, target, xc) in enumerate(self.train_dataloader):
-                self.Classifier.train()
                 # Get code directly from the dataset - bypass caching 
                 batch_size = x.size(0)
                 iter += batch_size
@@ -318,71 +327,32 @@ class Solver():
                     labels_onehot = torch.zeros(target.shape[0], 10).to('cuda')
                     labels_onehot.scatter_(1, target.view(-1, 1).to('cuda'), 1)
                     labels_onehot = (labels_onehot * 2) - 1
-                    labels_onehot = torch.cat([labels_onehot]*10, dim=1)
+                    #labels_onehot = torch.cat([labels_onehot]*10, dim=1)
                     target = target.view(target.size(0), -1)
                     self.zbuff_classes.append(target)
 
                     if self.hps.shared_weights:
                         self.ws = self.E.layers
 
-                cls_loss = 0
-                y_cls = [ x[0] for x in target.tolist() ]
-                y_cls = torch.Tensor(y_cls).to('cuda').long()
 
-                prediction = self.Classifier(xc)
-                cls_loss = classifier_loss(prediction, y_cls)
-                prediction = torch.argmax(prediction, 1).cpu().numpy()
-                acc_cls_real += accuracy_score(prediction, y_cls.cpu().detach().numpy())
-
-                """
-                prediction = self.Discriminator(xc)
-                #y_disc = torch.Tensor([1]*xc.shape[0]).to('cuda').long()
-                prediction = prediction.reshape(xc.shape[0])
-                prediction = (prediction > 0.5).float()
-                y_disc = torch.ones((xc.shape[0])).to('cuda').float()
-                disc_loss = discriminator_loss(prediction, y_disc)
-                acc_disc_real += accuracy_score(prediction.cpu().detach().numpy(),
-                                                y_disc.cpu().detach().numpy())
-                """
-
-                #self.cls_optim.zero_grad()
-                #self.cls_optim.step()
-
-                #self.Classifier.eval()
 
                 # DECODE
                 if self.G is not None:
                     z = torch.cat((z, labels_onehot), dim=1)
                     xr = self.G(z, self.ws)
 
-                prediction = self.Classifier(xr)
-                cls_loss += classifier_loss(prediction, y_cls) * .25
-                prediction = torch.argmax(prediction, 1).cpu().numpy()
-                acc_cls_recon += accuracy_score(prediction, y_cls.cpu().detach().numpy())
-
-                """
-                prediction = self.Discriminator(xr)
-                #y_disc = torch.Tensor([-1]*x_out.shape[0]).to('cuda').long()
-                prediction = prediction.reshape(xc.shape[0])
-                prediction = (prediction > 0.5).float()
-                y_disc = torch.zeros((xc.shape[0])).to('cuda').float()
-                disc_loss += discriminator_loss(prediction, y_disc)
-                acc_disc_recon += accuracy_score(prediction.cpu().detach().numpy(),
-                                                 y_disc.cpu().detach().numpy())
-                """
-
                 # Calculate VAE loss
                 log_dic = {}
                 log_dic.update({'QERR': float(err_quant)})
 
                 if self.G is not None and self.E is not None:
-                    xr = xr.view(xr.size(0), -1)
-                    x = x.view(x.size(0), -1)
+                    #xr = xr.view(xr.size(0), -1)
+                    #x = x.view(x.size(0), -1)
                     if self.hps.binary_reco_loss:
-                        loss_reco = torch.nn.functional.binary_cross_entropy(xr, x, reduction='none').sum() /batch_size
+                        loss_reco = torch.nn.functional.binary_cross_entropy(xr.view(x.size(0), -1), x.view(x.size(0), -1), reduction='none').sum() /batch_size
                     else:
-                        loss_reco = mse(xr, x) / batch_size
-                    loss = loss_reco
+                        pass
+                        #loss_reco = mse(xr.view(xr.size(0), -1), x.view(x.size(0), -1)) / batch_size
 
                     if self.hps.vae:
                         varlog = torch.clamp(varlog, -10, 10) 
@@ -393,34 +363,100 @@ class Solver():
                         log_dic.update({'kld_loss': float(loss_kld)})
                         loss = loss + loss_kld
 
-                    S = [np.vstack(self.zbuff), np.vstack(self.zbuff_classes)]
-                    x_out, y_out = self.eval(at_epoch=e,
-                                             results_filename='eval_out.txt',
-                                             latents=S)
+                    ## Update Classifier network
+                    # Do remember to use .detach() here!
+                    # Train with real images
+                    self.optim_C.zero_grad()
+                    y_cls = [ x[0] for x in target.tolist() ]
+                    y_cls = torch.Tensor(y_cls).to('cuda').long()
 
-                    prediction = self.Classifier(x_out)
-                    cls_loss += classifier_loss(prediction, y_out.long()) + .25
+                    prediction = self.Classifier(xc)
+                    errC_real = classifier_loss(prediction, y_cls)
                     prediction = torch.argmax(prediction, 1).cpu().numpy()
-                    acc_cls_gen += accuracy_score(prediction, y_out.cpu().detach().numpy())
+                    accC_real += accuracy_score(prediction, y_cls.cpu().detach().numpy())
 
-                    """
-                    prediction = self.Discriminator(x_out)
-                    prediction = prediction.reshape(xc.shape[0])
-                    prediction = (prediction > 0.5).float()
-                    #y_disc = torch.Tensor([-1]*x_out.shape[0]).to('cuda').long()
-                    y_disc = torch.zeros((xc.shape[0])).to('cuda').float()
-                    disc_loss += discriminator_loss(prediction, y_disc)
-                    acc_disc_gen += accuracy_score(prediction.cpu().detach().numpy(),
-                                                   y_disc.cpu().detach().numpy())
+                    # Train with reconstructed images
+                    prediction = self.Classifier(xr.detach())
+                    errC_recon = classifier_loss(prediction, y_cls)
+                    prediction = torch.argmax(prediction, 1).cpu().numpy()
+                    accC_recon += accuracy_score(prediction, y_cls.cpu().detach().numpy())
 
-                    loss = loss + cls_loss + disc_loss
-                    """
+                    S = [np.vstack(self.zbuff), np.vstack(self.zbuff_classes)]
+                    x_g, y_g = self.eval(at_epoch=e,
+                                         results_filename='eval_out.txt',
+                                         latents=S)
 
-                    loss = loss + cls_loss
+                    # Train with generated images
+                    prediction = self.Classifier(x_g.detach())
+                    errC_gen = classifier_loss(prediction, y_g.long())
+                    prediction = torch.argmax(prediction, 1).cpu().numpy()
+                    accC_gen += accuracy_score(prediction, y_g.cpu().detach().numpy())
 
+                    errC = (errC_real * 1) + (errC_recon * .5) + (errC_gen * .5)
+                    errC.backward()
+                    self.optim_C.step()
+
+                    ## Update Discriminator network
+                    # Do remember to use .detach() here!
+                    # Train with real images
+                    self.optim_D.zero_grad()
+                    prediction = self.Discriminator(xc).view(-1)
+                    yD_real = torch.ones((xc.shape[0])).to('cuda').float()
+                    errD_real = discriminator_loss(prediction, yD_real)
+                    accD_real += accuracy_score((prediction > 0.5).cpu().detach().numpy(),
+                                                yD_real.cpu().detach().numpy())
+
+                    # Train with reconstructed images
+                    prediction = self.Discriminator(xr.detach()).view(-1)
+                    yD_fake = torch.zeros((xc.shape[0])).to('cuda').float()
+                    errD_recon = discriminator_loss(prediction, yD_fake)
+                    accD_recon += accuracy_score((prediction > 0.5).cpu().detach().numpy(),
+                                                 yD_fake.cpu().detach().numpy())
+
+                    # Train with generated images
+                    prediction = self.Discriminator(x_g.detach()).view(-1)
+                    errD_gen = discriminator_loss(prediction, yD_fake)
+                    accD_gen += accuracy_score((prediction > 0.5).cpu().detach().numpy(),
+                                               yD_fake.cpu().detach().numpy())
+
+                    errD_train = errD_real + (errD_recon * .5) + (errD_gen * .5)
+                    errD_train.backward()
+                    self.optim_D.step()
+
+                    ## Update Autoencoder network
+                    # Run Classifier with real images
                     self.optim.zero_grad() 
+                    y_cls = [ x[0] for x in target.tolist() ]
+                    y_cls = torch.Tensor(y_cls).to('cuda').long()
+                    prediction = self.Classifier(xc)
+                    errC_real = classifier_loss(prediction, y_cls)
+
+                    # Run Classifier with reconstructed images
+                    prediction = self.Classifier(xr)
+                    errC_recon = classifier_loss(prediction, y_cls)
+
+                    # Run Classifier with generated images
+                    prediction = self.Classifier(x_g)
+                    errC_gen = classifier_loss(prediction, y_g.long())
+
+                    errC = (errC_real * 1) + (errC_recon * .5) + (errC_gen * .5)
+
+                    # Run Discriminator with reconstructed images and real labels
+                    prediction = self.Discriminator(xr).view(-1)
+                    errD_recon = discriminator_loss(prediction, yD_real)
+
+                    # Run Discriminator with generated images and real labels
+                    prediction = self.Discriminator(x_g).view(-1)
+                    errD_gen = discriminator_loss(prediction, yD_real)
+
+                    errD = (errD_recon * 1) + (errD_gen * 1)
+
+                    loss_reco = mse(xr.view(xr.size(0), -1), x.view(x.size(0), -1)) / batch_size
+                    loss = (loss_reco * 1) + (errC * 1) + (errD * 1)
+
                     loss.backward()
                     self.optim.step()
+
 
 
                 if self.G is not None: self.G.train() 
@@ -430,14 +466,14 @@ class Solver():
                 if self.G is not None and self.E is not None:
                     log_dic.update({'loss': float(loss),
                                     'reco_loss':float(loss_reco),
-                                    'cls_loss':float(cls_loss),
-                                    'disc_loss':float(disc_loss),
-                                    'acc_cls_real':float(acc_cls_real),
-                                    'acc_cls_recon':float(acc_cls_recon),
-                                    'acc_cls_gen':float(acc_cls_gen),
-                                    'acc_disc_real':float(acc_disc_real),
-                                    'acc_disc_recon':float(acc_disc_recon),
-                                    'acc_disc_gen':float(acc_disc_gen)})
+                                    'cls_loss':float(errC),
+                                    'disc_loss':float(errD_train),
+                                    'accC_real':float(accC_real),
+                                    'accC_recon':float(accC_recon),
+                                    'accC_gen':float(accC_gen),
+                                    'accD_real':float(accD_real),
+                                    'accD_recon':float(accD_recon),
+                                    'accD_gen':float(accD_gen)})
 
                 self.logr.log_loss(e, iter, stage_name='Train', losses=log_dic)
 
@@ -445,21 +481,26 @@ class Solver():
                     self.logr.print_batch_stat(stage_name='Train')
 
             #print(f'Classifier Accuracy: {}')
-            acc_cls_real /= len(self.train_dataloader)
-            acc_cls_recon /= len(self.train_dataloader)
-            acc_cls_gen /= len(self.train_dataloader)
+            accC_real /= len(self.train_dataloader)
+            accC_recon /= len(self.train_dataloader)
+            accC_gen /= len(self.train_dataloader)
 
-            acc_cls_real_list.append(acc_cls_real)
-            acc_cls_recon_list.append(acc_cls_recon)
-            acc_cls_gen_list.append(acc_cls_gen)
+            accC_real_list.append(accC_real)
+            accC_recon_list.append(accC_recon)
+            accC_gen_list.append(accC_gen)
+
+            accD_real /= len(self.train_dataloader)
+            accD_recon /= len(self.train_dataloader)
+            accD_gen /= len(self.train_dataloader)
+
+            accD_real_list.append(accD_real)
+            accD_recon_list.append(accD_recon)
+            accD_gen_list.append(accD_gen)
+
             reco_loss_list.append(loss_reco.item())
-            cls_loss_list.append(cls_loss.item())
-
-            """
-            acc_disc_real /= acc_disc_real/len(self.train_dataloader)
-            acc_disc_recon /= acc_disc_recon/len(self.train_dataloader)
-            acc_disc_gen /= acc_disc_gen/len(self.train_dataloader)
-            """
+            cls_loss_list.append(errC.item())
+            disc_loss_list.append(errD_train.item())
+            loss_list.append(loss.item())
 
             print(f'Epoch: {e} - Time: {time.time() - start}')
             self.logr.print_batch_stat('Train')
@@ -509,12 +550,22 @@ class Solver():
             self.save_checkpoint(epoch=e, iter=iter, current_loss= loss_reco_avg)
 
         fig = plt.figure()
-        plt.plot(range(len(acc_cls_real_list)), acc_cls_real_list, label='Acc Real Data')
-        plt.plot(range(len(acc_cls_recon_list)), acc_cls_recon_list, label='Acc Reconstructed Data')
-        plt.plot(range(len(acc_cls_gen_list)), acc_cls_gen_list, label='Acc Generated Data')
-        plt.ylim(0, 1)
+        plt.plot(range(len(accC_real_list)), accC_real_list, label='Acc Real Data')
+        plt.plot(range(len(accC_recon_list)), accC_recon_list, label='Acc Reconstructed Data')
+        plt.plot(range(len(accC_gen_list)), accC_gen_list, label='Acc Generated Data')
+        plt.ylim(0, 1.05)
+        plt.title('Classifier')
         plt.legend()
         plt.savefig('cls_acc.png', dpi=300)
+
+        fig = plt.figure()
+        plt.plot(range(len(accD_real_list)), accD_real_list, label='Acc Real Data')
+        plt.plot(range(len(accD_recon_list)), accD_recon_list, label='Acc Reconstructed Data')
+        plt.plot(range(len(accD_gen_list)), accD_gen_list, label='Acc Generated Data')
+        plt.ylim(0, 1.05)
+        plt.title('Discriminator')
+        plt.legend()
+        plt.savefig('disc_acc.png', dpi=300)
 
         fig = plt.figure()
         plt.plot(range(len(reco_loss_list)), reco_loss_list, label='Reconstruction Loss')
@@ -525,6 +576,16 @@ class Solver():
         plt.plot(range(len(cls_loss_list)), cls_loss_list, label='Classifier Loss')
         plt.legend()
         plt.savefig('cls_loss.png', dpi=300)
+
+        fig = plt.figure()
+        plt.plot(range(len(disc_loss_list)), disc_loss_list, label='Discriminator Loss')
+        plt.legend()
+        plt.savefig('disc_loss.png', dpi=300)
+
+        fig = plt.figure()
+        plt.plot(range(len(loss_list)), loss_list, label='Total Loss')
+        plt.legend()
+        plt.savefig('total_loss.png', dpi=300)
 
         return
 
@@ -614,14 +675,13 @@ class Solver():
                 z_static = z_static.cuda()
 
             labels = np.random.randint(10, size=z_static.shape[0])
-            labels = torch.tensor(labels).type(torch.LongTensor).to('cuda')
+            labels = torch.tensor(labels).long().to('cuda')
             labels_onehot = torch.zeros(labels.shape[0], 10).to('cuda')
-            labels_out = labels_onehot
             labels_onehot.scatter_(1, labels.view(-1, 1).to('cuda'), 1)
             labels_onehot = (labels_onehot * 2) - 1
-            labels_onehot = torch.cat([labels_onehot]*10, dim=1)
+            #labels_onehot = torch.cat([labels_onehot]*10, dim=1)
             z_static = torch.cat((z_static, labels_onehot), dim=1)
-            xr  = self.G(z_static, None)
+            xr = self.G(z_static, None)
 
             tosave = int(self.hps.gen_imgs - (i)*xr.size(0))
             #save_images(xr[:tosave], self.hps.channels, self.hps.img_size, imgs_reco_dir, i*xr.size(0))
@@ -701,7 +761,7 @@ class Solver():
                 labels_onehot = torch.zeros(target.shape[0], 10).to('cuda')
                 labels_onehot.scatter_(1, target.view(-1, 1).to('cuda'), 1)
                 labels_onehot = (labels_onehot * 2) - 1
-                labels_onehot = torch.cat([labels_onehot]*10, dim=1)
+                #labels_onehot = torch.cat([labels_onehot]*10, dim=1)
                 self.eval_latents.append(z.view(z.size(0), -1).detach().cpu().numpy())
                 self.eval_classes.append(target)
 

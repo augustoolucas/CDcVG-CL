@@ -288,7 +288,7 @@ class GenConvResBlock32(nn.Module):
         self.fmres = 4 
         out_size = self.in_channels*self.fmres*self.fmres
         bias = True
-        self.l1l=nn.Linear(self.hps.zsize + 100, out_size, bias=bias)
+        self.l1l=nn.Linear(self.hps.zsize + 10, out_size, bias=bias)
         
 
     def forward(self, x, sw=None):

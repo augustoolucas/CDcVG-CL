@@ -14,7 +14,7 @@ def main():
     hps.channels = 1
     hps.model_conv = False
     hps.shared_weights = False
-    hps.workers = 10
+    hps.workers = 1
     hps.print_every_batch = 100
     hps.keep_last_models = 10
     hps.binary_reco_loss = False
@@ -78,7 +78,7 @@ def main():
         hps.interpolate_steps = 10
         hps.vae_model = 'ConvResBlock32'
         hps.lr[0] = 1e-3
-        hps.zsize = 768
+        hps.zsize = 600
 
 #=====================================================
     if 0 and hps.cfg == 'cifar10_bae':
