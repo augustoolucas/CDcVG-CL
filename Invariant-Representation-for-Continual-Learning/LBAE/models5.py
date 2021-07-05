@@ -76,15 +76,33 @@ class BinDropout(nn.Module):
             return x
         return x
 
+class ClassifierZ(nn.Module):
+    def __init__(self, hps):
+        super().__init__()
+        
+        self.linear = nn.Sequential(nn.Linear(hps.zsize, hps.zsize//2),
+                                    nn.ELU(inplace=True),
+                                    nn.Linear(hps.zsize//2, hps.zsize//4),
+                                    nn.ELU(inplace=True),
+                                    nn.Linear(hps.zsize//4, 1),
+                                    nn.Sigmoid())
+
+    def forward(self, x):
+        return self.linear(x)
+
 class Classifier(nn.Module):
     def __init__(self, hps):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv2d(hps.channels, 16, kernel_size=3, stride=2, padding=1),
+        self.conv = nn.Sequential(nn.Conv2d(hps.channels, 64, kernel_size=3, stride=1, padding=1),
                                   nn.ELU(inplace=True),
-                                  nn.Conv2d(16, 32, kernel_size=3, stride=3, padding=0),
+                                  nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+                                  nn.ELU(inplace=True),
+                                  nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+                                  nn.ELU(inplace=True),
+                                  nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
                                   nn.ELU(inplace=True))
 
-        self.linear = nn.Sequential(nn.Linear(800, 10),
+        self.linear = nn.Sequential(nn.Linear(4096, 10),
                                     nn.Softmax(dim=1))
 
     def forward(self, x):
