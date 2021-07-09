@@ -42,6 +42,8 @@ def main():
     hps.set_attr = -1
     hps.dataset = None
 
+    hps.discriminator = True
+
     hps.cfg = 'cifar10_bae'
     # hps.cfg = 'cifar10_vae'
 
@@ -65,14 +67,14 @@ def main():
 
 #=====================================================
     if 1 and hps.cfg == 'cifar10_bae':
-        hps.exp_suffix = 'classifier+discriminator'
+        hps.exp_suffix = 'test-discr'
         hps.dataset = 'cifar10'
         # hps.parallel = True
-        hps.epochs_max = 200
+        hps.epochs_max = 50
         hps.channels = 3
         hps.img_size= 32
-        hps.batch_size = 512
-        hps.batch_size_test = 512
+        hps.batch_size = 128
+        hps.batch_size_test = 128
         hps.sample_method = 'cov'
         hps.gen_imgs = 512
         hps.interpolate_steps = 10
