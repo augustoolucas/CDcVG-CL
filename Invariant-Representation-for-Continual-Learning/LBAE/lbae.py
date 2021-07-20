@@ -261,10 +261,14 @@ class Solver():
             self.optim = torch.optim.Adam(params=params , lr=self.hps.lr[0], weight_decay=self.hps.l2 )
 
         if self.ClassifierZ is not None:
-            self.optim_CZ = torch.optim.SGD(params=self.ClassifierZ.parameters(), lr=self.hps.lr[0], weight_decay=self.hps.l2)
+            self.optim_CZ = torch.optim.Adam(params=self.ClassifierZ.parameters(), lr=self.hps.lr[0] * .5, weight_decay=self.hps.l2)
+            accC_Z_list = []
+            accC_Z_adv_list = []
+            cZ_loss_list = []
+            cZ_adv_loss_list = []
 
         if self.Discriminator is not None:
-            self.optim_D = torch.optim.SGD(params=self.Discriminator.parameters(), lr=self.hps.lr[0], weight_decay=self.hps.l2)
+            self.optim_D = torch.optim.Adam(params=self.Discriminator.parameters(), lr=self.hps.lr[0], weight_decay=self.hps.l2, betas=(0.5, 0.999))
             accD_recon_list = []
             accD_gen_list = []
             disc_loss_list = []
@@ -312,12 +316,7 @@ class Solver():
         self.zbuff_classes = []
         nsave_images=64
 
-        accC_Z_list = []
-        accC_Z_adv_list = []
-
         reco_loss_list = []
-        cZ_loss_list = []
-        cZ_adv_loss_list = []
         loss_list = []
 
         for e in range(start_from_epoch, self.hps.epochs_max):
@@ -325,15 +324,17 @@ class Solver():
             self.logr.start_epoch('Train', e)
             if self.G is not None: self.G.train() 
             if self.E is not None: self.E.train() 
-            if self.ClassifierZ is not None: self.ClassifierZ.train()
+
+            if self.ClassifierZ is not None:
+                self.ClassifierZ.train()
+                accC_Z = 0
+                accC_Z_adv = 0
 
             if self.Discriminator is not None:
                 self.Discriminator.train()
                 accD_recon = 0
                 accD_gen = 0
 
-            accC_Z = 0
-            accC_Z_adv = 0
             epoch_loss = 0
 
             for i, (x, target, xc) in enumerate(self.train_dataloader):
@@ -391,6 +392,8 @@ class Solver():
                     x_g, y_g = self.eval(at_epoch=e,
                                          results_filename='eval_out.txt',
                                          latents=S)
+                    self.G.train() 
+                    self.E.train() 
 
                     assert len(set(target.view(-1).tolist())) == 2
 
@@ -440,7 +443,7 @@ class Solver():
 
                     if self.ClassifierZ is not None:
                         prediction = self.ClassifierZ(z)
-                        target = (target - 1) * -1
+                        target = (target - 1) * -1 # Flip labels
                         cZ_adv_loss = classifier_loss(prediction, target.float())
                         y_cls = target.view(-1).cpu().detach().numpy()
                         prediction = prediction.view(-1).cpu().detach().numpy()
@@ -458,7 +461,7 @@ class Solver():
 
                     loss.backward()
                     self.optim.step()
-
+                
                 # LOGGING
                 #=====================================
                 if self.G is not None and self.E is not None:
@@ -496,6 +499,7 @@ class Solver():
                 plt.ylim(0, 1.05)
                 plt.title('ClassifierZ - Accuracy')
                 plt.legend()
+                fig.tight_layout()
                 plt.savefig(f'{self.logr.exp_path}/cls_acc.png', dpi=300)
 
                 fig = plt.figure()
@@ -503,6 +507,7 @@ class Solver():
                 plt.plot(range(len(cZ_adv_loss_list)), cZ_adv_loss_list, label='Training Autoencoder')
                 plt.title('ClassifierZ - Loss')
                 plt.legend()
+                fig.tight_layout()
                 plt.savefig(f'{self.logr.exp_path}/cls_loss.png', dpi=300)
 
             if self.Discriminator is not None:

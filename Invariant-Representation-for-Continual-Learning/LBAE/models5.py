@@ -81,10 +81,9 @@ class ClassifierZ(nn.Module):
         super().__init__()
         
         self.linear = nn.Sequential(nn.Linear(hps.zsize, hps.zsize//2),
+                                    nn.BatchNorm1d(hps.zsize//2),
                                     nn.ELU(inplace=True),
-                                    nn.Linear(hps.zsize//2, hps.zsize//4),
-                                    nn.ELU(inplace=True),
-                                    nn.Linear(hps.zsize//4, 1),
+                                    nn.Linear(hps.zsize//2, 1),
                                     nn.Sigmoid())
 
     def forward(self, x):
@@ -115,20 +114,23 @@ class Discriminator(nn.Module):
     def __init__(self, hps):
         super().__init__()
         self.conv = nn.Sequential(nn.Conv2d(hps.channels, 64, kernel_size=3, stride=1, padding=1),
+                                  nn.BatchNorm2d(64),
                                   nn.ELU(inplace=True),
                                   nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-                                  nn.ELU(inplace=True),
-                                  nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+                                  nn.BatchNorm2d(128),
                                   nn.ELU(inplace=True),
                                   nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-                                  nn.ELU(inplace=True))
-
-        self.linear = nn.Sequential(nn.Linear(4096, 1),
-                                    nn.Sigmoid())
+                                  nn.BatchNorm2d(256),
+                                  nn.ELU(inplace=True),
+                                  nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
+                                  nn.BatchNorm2d(512),
+                                  nn.ELU(inplace=True),
+                                  nn.Conv2d(512, 1, kernel_size=4, padding=0),
+                                  nn.Sigmoid())
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.linear(x.view(x.size(0), -1))
+        x = x.view(x.size(0), -1)
 
         return x
 
