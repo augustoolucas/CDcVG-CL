@@ -19,9 +19,9 @@ import matplotlib.pyplot as plt
 from torchsummary import summary
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score
-
+from torchvision.datasets import DatasetFolder
 from mllogger import *
-from datasets import CIFAR10Ex, CelebAEx, MNISTEx
+from datasets import CIFAR10Ex, CelebAEx, MNISTEx, pil_loader, IMG_EXTENSIONS
 from models5 import *
 from sys_utils import *
 from image_utils import *
@@ -184,6 +184,20 @@ class Solver():
             self.test_dataset.data = self.test_dataset.data[indexes]
             self.test_dataset.targets = [ self.test_dataset.targets[idx] for idx in indexes ]
 
+        elif self.hps.dataset == 'linnaeus':
+            transform = transforms.Compose([transforms.ToTensor(),
+                                          transforms.Resize((64,64))])
+
+            self.train_dataset = DatasetFolder(root='./linnaeus/train',
+                                               loader=pil_loader,
+                                               extensions=IMG_EXTENSIONS,
+                                               transform=transform)
+
+            self.test_dataset = DatasetFolder(root='./linnaeus/test',
+                                              loader=pil_loader,
+                                              extensions=IMG_EXTENSIONS,
+                                              transform=transform)
+
         else:
             print("Wrong dataset name:", self.hps.dataset)
             sys.exit(0)
@@ -337,7 +351,8 @@ class Solver():
 
             epoch_loss = 0
 
-            for i, (x, target, xc) in enumerate(self.train_dataloader):
+            for i, (x, target) in enumerate(self.train_dataloader):
+                xc=x
                 # Get code directly from the dataset - bypass caching 
                 batch_size = x.size(0)
                 iter += batch_size
@@ -394,8 +409,6 @@ class Solver():
                                          latents=S)
                     self.G.train() 
                     self.E.train() 
-
-                    assert len(set(target.view(-1).tolist())) == 2
 
                     if self.ClassifierZ is not None:
                         ## Update ClassifierZ
@@ -757,7 +770,8 @@ class Solver():
 
         print("Evaluating samples. N=",len(dataset.dataset),  flush=False)
         self.logr.start_epoch('Eval', e)
-        for i, (x, target, xc) in enumerate(dataset):
+        for i, (x, target) in enumerate(dataset):
+            xc = x
             target = target.view(target.size(0), -1)
             batch_size = x.size(0)
 
