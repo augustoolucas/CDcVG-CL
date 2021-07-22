@@ -19,9 +19,9 @@ import matplotlib.pyplot as plt
 from torchsummary import summary
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score
-from torchvision.datasets import DatasetFolder
+
 from mllogger import *
-from datasets import CIFAR10Ex, CelebAEx, MNISTEx, pil_loader, IMG_EXTENSIONS
+from datasets import CIFAR10Ex, CelebAEx, MNISTEx
 from models5 import *
 from sys_utils import *
 from image_utils import *
@@ -184,20 +184,6 @@ class Solver():
             self.test_dataset.data = self.test_dataset.data[indexes]
             self.test_dataset.targets = [ self.test_dataset.targets[idx] for idx in indexes ]
 
-        elif self.hps.dataset == 'linnaeus':
-            transform = transforms.Compose([transforms.ToTensor(),
-                                          transforms.Resize((64,64))])
-
-            self.train_dataset = DatasetFolder(root='./linnaeus/train',
-                                               loader=pil_loader,
-                                               extensions=IMG_EXTENSIONS,
-                                               transform=transform)
-
-            self.test_dataset = DatasetFolder(root='./linnaeus/test',
-                                              loader=pil_loader,
-                                              extensions=IMG_EXTENSIONS,
-                                              transform=transform)
-
         else:
             print("Wrong dataset name:", self.hps.dataset)
             sys.exit(0)
@@ -272,7 +258,7 @@ class Solver():
 
         if self.G is not None and self.E is not None:
             params = list(self.E.parameters()) + list(self.G.parameters())
-            self.optim = torch.optim.Adam(params=params , lr=self.hps.lr[0], weight_decay=self.hps.l2 )
+            self.optim = torch.optim.Adam(params=params , lr=self.hps.lr[0], weight_decay=self.hps.l2, betas=(0.5, 0.999))
 
         if self.ClassifierZ is not None:
             self.optim_CZ = torch.optim.Adam(params=self.ClassifierZ.parameters(), lr=self.hps.lr[0] * .5, weight_decay=self.hps.l2)
@@ -351,8 +337,7 @@ class Solver():
 
             epoch_loss = 0
 
-            for i, (x, target) in enumerate(self.train_dataloader):
-                xc=x
+            for i, (x, target, xc) in enumerate(self.train_dataloader):
                 # Get code directly from the dataset - bypass caching 
                 batch_size = x.size(0)
                 iter += batch_size
@@ -410,6 +395,8 @@ class Solver():
                     self.G.train() 
                     self.E.train() 
 
+                    assert len(set(target.view(-1).tolist())) == 2
+
                     if self.ClassifierZ is not None:
                         ## Update ClassifierZ
                         self.optim_CZ.zero_grad()
@@ -424,7 +411,7 @@ class Solver():
                         cZ_loss.backward()
                         self.optim_CZ.step()
 
-                    if self.Discriminator is not None:
+                    if self.Discriminator is not None and e > 100:
                         ## Update Discriminator
                         self.optim_D.zero_grad()
                         # Do remember to use .detach() here! - www.programmersought.com/article/152552205/
@@ -450,7 +437,7 @@ class Solver():
                     self.optim.zero_grad() 
                     # Do remember to NOT use .detach() here! - www.programmersought.com/article/152552205/
                     # Run Discriminator with generated images and real labels
-                    if self.Discriminator is not None:
+                    if self.Discriminator is not None and e > 100:
                         prediction = self.Discriminator(x_g).view(-1)
                         D_adv_loss = discriminator_loss(prediction, yD_recon)
 
@@ -469,7 +456,7 @@ class Solver():
                     if self.ClassifierZ is not None:
                         loss += cZ_adv_loss * 1
 
-                    if self.Discriminator is not None:
+                    if self.Discriminator is not None and e > 100:
                         loss += D_adv_loss * 1
 
                     loss.backward()
@@ -480,7 +467,7 @@ class Solver():
                 if self.G is not None and self.E is not None:
                     log_dic.update({'loss': float(loss),
                                     'reco_loss':float(loss_recon)})
-                    if self.Discriminator is not None:
+                    if self.Discriminator is not None and e > 100:
                         log_dic.update({'disc_loss':float(D_loss),
                                         'accD_recon':float(accD_recon),
                                         'accD_gen':float(accD_gen)
@@ -523,7 +510,7 @@ class Solver():
                 fig.tight_layout()
                 plt.savefig(f'{self.logr.exp_path}/cls_loss.png', dpi=300)
 
-            if self.Discriminator is not None:
+            if self.Discriminator is not None and e > 100:
                 accD_recon /= len(self.train_dataloader)
                 accD_gen /= len(self.train_dataloader)
                 accD_recon_list.append(accD_recon)
@@ -770,8 +757,7 @@ class Solver():
 
         print("Evaluating samples. N=",len(dataset.dataset),  flush=False)
         self.logr.start_epoch('Eval', e)
-        for i, (x, target) in enumerate(dataset):
-            xc = x
+        for i, (x, target, xc) in enumerate(dataset):
             target = target.view(target.size(0), -1)
             batch_size = x.size(0)
 
