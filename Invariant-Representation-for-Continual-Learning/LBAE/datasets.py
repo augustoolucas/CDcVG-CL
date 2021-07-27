@@ -9,13 +9,21 @@ __license__= "MIT License"
 from torchvision.datasets import CIFAR10 
 from torchvision.datasets import MNIST
 from torchvision.datasets import CelebA
-
+from PIL import Image
 
 def corrupt(x, corrupt_method, corrupt_args):
     """ 
         Disabled
     """ 
     return x
+
+IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', '.webp')
+def pil_loader(path: str) -> Image.Image:
+    # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
+    with open(path, 'rb') as f:
+        img = Image.open(f)
+        return img.convert('RGB')
+
 
 class CIFAR10Ex(CIFAR10):
 
