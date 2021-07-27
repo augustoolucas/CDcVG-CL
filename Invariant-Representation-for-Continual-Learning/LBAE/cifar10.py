@@ -43,6 +43,13 @@ def main():
     hps.dataset = None
 
     hps.discriminator = True
+    hps.auxiliary = True
+
+    if hps.auxiliary == True and hps.discriminator == False:
+        print('Auxiliary Classifier is part of the Discriminator')
+        exit()
+
+    hps.classifierZ = False
 
     hps.cfg = 'cifar10_bae'
     # hps.cfg = 'cifar10_vae'
@@ -67,14 +74,14 @@ def main():
 
 #=====================================================
     if 1 and hps.cfg == 'cifar10_bae':
-        hps.exp_suffix = 'test-discr'
+        hps.exp_suffix = 'auxiliary-classifier'
         hps.dataset = 'cifar10'
         # hps.parallel = True
-        hps.epochs_max = 50
+        hps.epochs_max = 100
         hps.channels = 3
         hps.img_size= 32
-        hps.batch_size = 128
-        hps.batch_size_test = 128
+        hps.batch_size = 512
+        hps.batch_size_test = 512
         hps.sample_method = 'cov'
         hps.gen_imgs = 512
         hps.interpolate_steps = 10
