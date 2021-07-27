@@ -113,7 +113,8 @@ class Classifier(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self, hps):
         super().__init__()
-        self.conv = nn.Sequential(nn.Conv2d(hps.channels, 64, kernel_size=3, stride=1, padding=1),
+        self.hps = hps
+        self.conv = nn.Sequential(nn.Conv2d(self.hps.channels, 64, kernel_size=3, stride=1, padding=1),
                                   nn.BatchNorm2d(64),
                                   nn.ELU(inplace=True),
                                   nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
@@ -124,15 +125,23 @@ class Discriminator(nn.Module):
                                   nn.ELU(inplace=True),
                                   nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
                                   nn.BatchNorm2d(512),
-                                  nn.ELU(inplace=True),
-                                  nn.Conv2d(512, 1, kernel_size=4, padding=0),
-                                  nn.Sigmoid())
+                                  nn.ELU(inplace=True))
+
+        self.discrimination = nn.Sequential(nn.Conv2d(512, 1, kernel_size=4, padding=0),
+                                            nn.Sigmoid())
+
+        if self.hps.auxiliary == True:
+            self.classification = nn.Sequential(nn.Conv2d(512, 1, kernel_size=4, padding=0),
+                                                nn.Sigmoid())
 
     def forward(self, x):
         x = self.conv(x)
-        x = x.view(x.size(0), -1)
+        discrimination = self.discrimination(x).view(-1)
 
-        return x
+        if self.hps.auxiliary == True:
+            classification = self.classification(x).view(-1)
+
+        return discrimination, classification
 
 
 #===========================================================================================
@@ -308,7 +317,7 @@ class GenConvResBlock32(nn.Module):
         self.fmres = 4 
         out_size = self.in_channels*self.fmres*self.fmres
         bias = True
-        self.l1l=nn.Linear(self.hps.zsize + 10, out_size, bias=bias)
+        self.l1l=nn.Linear(self.hps.zsize, out_size, bias=bias)
         
 
     def forward(self, x, sw=None):
