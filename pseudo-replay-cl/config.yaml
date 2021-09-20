@@ -1,3 +1,6 @@
 ---
 ### Training parameters ###
 learning_rate: 1e-2
+n_replay: 5000 # per task
+batch_size: 128
+epochs: 10
