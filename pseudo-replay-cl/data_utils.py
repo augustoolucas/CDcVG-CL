@@ -1,6 +1,7 @@
-from torch.utils.data import random_split
+from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import numpy as np
+import torch
 import copy
 import random
 
@@ -46,7 +47,7 @@ def load_tasks(dataset, val=False):
 
 def create_tasks(dataset):
     n_classes = len(set(dataset.targets.tolist()))
-    task_labels = [[x, x+1] for x in range(0, n_classes, 2)]
+    task_labels = get_tasks_labels(n_classes)
     datasets = []
 
     for labels in task_labels:
@@ -57,3 +58,34 @@ def create_tasks(dataset):
         datasets.append(task_set)
      
     return datasets
+
+def get_tasks_labels(n_classes):
+    return [[x, x+1] for x in range(0, n_classes, 2)]
+
+def get_task_data_shape(data):
+    return data[0].data.shape[1:]
+
+def get_task_n_classes(data):
+    n_classes = 0
+    for task in data:
+        n_classes += len(set(task.targets.tolist()))
+        
+    return n_classes
+
+def get_dataloader(dataset, batch_size):
+    loader = DataLoader(dataset,
+                        batch_size,
+                        num_workers=0,
+                        pin_memory=True,
+                        shuffle=True)
+    return loader
+
+def update_train_set(dataset, new_images, new_labels):
+    if new_images.size(0) == 0:
+        return dataset
+
+    dataset.data = torch.cat([dataset.data, new_images], dim=0)
+    dataset.targets = torch.cat([dataset.targets, new_labels], dim=0)
+
+    return dataset
+
