@@ -63,7 +63,7 @@ def get_tasks_labels(n_classes):
     return [[x, x+1] for x in range(0, n_classes, 2)]
 
 def get_task_data_shape(data):
-    return data[0].data.shape[1:]
+    return data[0][0][0].shape
 
 def get_task_n_classes(data):
     n_classes = 0
@@ -83,6 +83,14 @@ def get_dataloader(dataset, batch_size):
 def update_train_set(dataset, new_images, new_labels):
     if new_images.size(0) == 0:
         return dataset
+
+    if len(dataset.data.shape) < len(new_images.shape):
+        if new_images.size(1) == 1:
+            new_images = torch.squeeze(new_images, dim=1)
+        else:
+            # TODO: Raise an exception instead
+            print('Unknown error')
+            exit()
 
     dataset.data = torch.cat([dataset.data, new_images], dim=0)
     dataset.targets = torch.cat([dataset.targets, new_labels], dim=0)

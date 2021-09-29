@@ -1,8 +1,10 @@
+from tqdm import tqdm
 import torch
 import yaml
 import data_utils
 import ircl_models
 import numpy as np
+from sklearn.metrics import accuracy_score, precision_score
 
 def onehot_encoder(labels, n_classes):
     labels_onehot = torch.zeros(labels.shape[0], n_classes)
@@ -44,28 +46,55 @@ def train(config, encoder, decoder, classifier, train_loader, val_loader, task_l
     ### ------ Losses ------ ###
     pixelwise_loss = torch.nn.MSELoss(reduction='sum')
     classification_loss = torch.nn.CrossEntropyLoss()
+    kl_divergence_loss = lambda var, mu: 0.5 * torch.sum(torch.exp(var) + mu**2 - 1 - var)
 
     encoder.train()
     decoder.train()
     classifier.train()
+    train_bar = tqdm(range(config['epochs']))
 
-    for epoch in range(config['epochs']):
-        for batch_idx, (images, labels) in enumerate(train_loader):
+    for epoch in train_bar:
+        total_loss = 0
+        acc = 0
+        for batch_idx, (images, labels) in enumerate(train_loader, start=1):
+            ### ------ Training autoencoder ------ ###
             encoder.zero_grad()
             decoder.zero_grad()
-            classifier.zero_grad()
 
             labels_onehot = onehot_encoder(labels, 10).to(device)
             images, labels = images.to(device), labels.to(device)
             latents, mu, var = encoder(images)
             recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
 
-            kl_loss = 0.5 * torch.sum(torch.exp(var) + mu**2 - 1. - mu)/config['batch_size']
+            kl_loss = kl_divergence_loss(var, mu)/config['batch_size']
             rec_loss = pixelwise_loss(recon_images, images)/config['batch_size']
             cvae_loss = rec_loss + kl_loss
 
             cvae_loss.backward()
             optimizer_cvae.step()
+
+            ### ------ Training classifier ------ ###
+            classifier.zero_grad()
+
+            classifier_output = classifier(images.view(images.size(0), -1),
+                                           latents.detach())
+            classifier_loss = classification_loss(classifier_output, labels)
+
+            output_list = torch.argmax(classifier_output, dim=1).tolist()
+            acc += accuracy_score(output_list, labels.detach().cpu().numpy())
+            classifier_loss.backward()
+            optimizer_C.step()
+
+            total_loss += cvae_loss + classifier_loss
+
+            train_bar.set_description(
+                f'Epoch: {(epoch + 1)}/{config["epochs"]} - Loss: {(total_loss/batch_idx):.03f} - Accuracy: {(acc/batch_idx)*100:.03f}%'
+            )
+    
+        total_loss /= len(train_loader)
+    # evaluate using validation set
+    # visualize 
+
 
 
 def main(config):
