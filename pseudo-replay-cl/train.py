@@ -6,8 +6,8 @@ import yaml
 import copy
 import torch
 import models
-import data_utils
-import plot_utils
+import utils.data
+import utils.plot
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -21,7 +21,7 @@ def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, devi
             new_labels = torch.cat((new_labels, y))
 
     new_labels = new_labels[torch.randperm(new_labels.size(0))] # Shuffling the Tensor
-    new_labels_onehot = data_utils.onehot_encoder(new_labels, n_classes)
+    new_labels_onehot = utils.data.onehot_encoder(new_labels, n_classes)
 
     z = torch.Tensor(np.random.normal(0, 1, (n_gen * len(labels), latent_dim)))
     decoder.eval()
@@ -69,7 +69,7 @@ def gen_recon_images(encoder, decoder, data_loader, device):
     ### Generate reconstructed images ###
     with torch.no_grad():
         images, labels = next(iter(data_loader))
-        labels_onehot = data_utils.onehot_encoder(labels, 10).to(device)
+        labels_onehot = utils.data.onehot_encoder(labels, 10).to(device)
         images = images.to(device)
         latents, _, _ = encoder(images)
         images = images.to('cpu')
@@ -106,7 +106,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             encoder.zero_grad()
             decoder.zero_grad()
 
-            labels_onehot = data_utils.onehot_encoder(labels, 10).to(device)
+            labels_onehot = utils.data.onehot_encoder(labels, 10).to(device)
             images, labels = images.to(device), labels.to(device)
             latents, mu, var = encoder(images)
             recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
@@ -144,7 +144,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     real_images, recon_images = gen_recon_images(encoder, decoder, val_loader, device)
     gen_images, _ = gen_pseudo_samples(128, tasks_labels, decoder, 10, 32, device)
 
-    plot_utils.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
+    utils.plot.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
 
 def save_model(model, path, name):
     torch.save(model.state_dict(), f'{path}/{name}.pt')
@@ -153,11 +153,11 @@ def main(config):
     torch.manual_seed(1)
     os.environ['PYTHONHASHSEED'] = str(1)
     np.random.seed(1)
-    ### ------ Load Data ------ ###
-    train_tasks, val_tasks, test_tasks = data_utils.load_tasks('MNIST', val=False)
-    data_shape = data_utils.get_task_data_shape(train_tasks)
-    classes = data_utils.get_tasks_classes(train_tasks)
-    tasks_labels = data_utils.get_tasks_labels(train_tasks)
+    ## ------ Load Data ------ ###
+    train_tasks, val_tasks, test_tasks = utils.data.load_tasks('MNIST', val=False)
+    data_shape = utils.data.get_task_data_shape(train_tasks)
+    classes = utils.data.get_tasks_classes(train_tasks)
+    tasks_labels = utils.data.get_tasks_labels(train_tasks)
     n_tasks = len(train_tasks)
     n_classes = len(classes)
 
@@ -166,10 +166,10 @@ def main(config):
     print(f'Device: {device}')
 
     ### ------ Loading IRCL Models ------ ###
-    encoder = models.ircl.Encoder(data_shape, 300, config['latent_size']).to(device)
-    decoder = models.ircl.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
+    #encoder = models.ircl.Encoder(data_shape, 300, config['latent_size']).to(device)
+    #decoder = models.ircl.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
 
-    #encoder = models.conv.Encoder(data_shape, 300, config['latent_size']).to(device)
+    encoder = models.conv.Encoder(data_shape, 300, config['latent_size']).to(device)
     decoder = models.conv.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
     specific = models.conv.Specific(data_shape, 20).to(device)
     classifier = models.conv.Classifier(config['latent_size'], 20, 40, n_classes).to(device)
@@ -189,18 +189,18 @@ def main(config):
                                                         32,
                                                         device)
 
-            train_set = data_utils.update_train_set(train_set,
+            train_set = utils.data.update_train_set(train_set,
                                                     gen_images,
                                                     gen_labels)
 
-        train_loader = data_utils.get_dataloader(train_set,
+        train_loader = utils.data.get_dataloader(train_set,
                                                  config['batch_size'])
 
         val_set = val_tasks[:task + 1] if val_tasks is not None else test_tasks[:task + 1]
-        val_loader = data_utils.get_dataloader(val_set, config['batch_size'])
+        val_loader = utils.data.get_dataloader(val_set, config['batch_size'])
 
         test_set = test_tasks[task]
-        test_loader = data_utils.get_dataloader(test_set, batch_size=128)
+        test_loader = utils.data.get_dataloader(test_set, batch_size=128)
 
         train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, tasks_labels[:task+1], task, device)
         acc = test(encoder, specific, classifier, test_loader, device)
@@ -212,19 +212,22 @@ def main(config):
 
     ### ------ Testing tasks ask after training all of them ------ ###
 
-    ACC = 0
-    BWT = 0
+    ACCs = []
+    BWTs = []
     for task in range(n_tasks):
         test_set = test_tasks[task]
-        test_loader = data_utils.get_dataloader(test_set, batch_size=1000)
+        test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
         task_acc = test(encoder, specific, classifier, test_loader, device)
-        ACC += task_acc
-        BWT += (task_acc - acc_of_task_t_at_time_t[task])
+        ACCs.append(task_acc)
+        BWTs.append(task_acc - acc_of_task_t_at_time_t[task])
 
-        print(f'Task {task} - Accuracy: {(task_acc)*100:.02f}%')
 
-    print(f'Average accuracy: {(ACC/n_tasks)*100:.02f}%')
-    print(f'Average backward transfer: {(BWT/(n_tasks-1))*100:.02f}%')
+    with open(config['exp_path']+'/output.log', 'w+') as f:
+        for acc in range(len(ACCs)):
+            print(f'Task {task} - Accuracy: {(acc)*100:.02f}%', file=f)
+
+        print(f'Average accuracy: {(sum(ACCs)/n_tasks)*100:.02f}%', file=f)
+        print(f'Average backward transfer: {(sum(BWTs)/(n_tasks-1))*100:.02f}%', file=f)
 
 def load_config(file):
     config = None
