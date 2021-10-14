@@ -82,9 +82,9 @@ class Classifier(nn.Module):
         logits = self.output(x)
         return logits
 
-def load_all(img_shape, n_classes, device):
-    encoder = Encoder(img_shape, 300, 32).to(device)
-    decoder = Decoder(img_shape, 300, 32, n_classes, use_label=True).to(device)
-    classifier = Classifier(img_shape, 32, 20, 40, n_classes).to(device)
+def load_all(img_shape, n_classes, latent_dim, device):
+    encoder = Encoder(img_shape, 300, latent_dim).to(device)
+    decoder = Decoder(img_shape, 300, latent_dim, n_classes, use_label=True).to(device)
+    classifier = Classifier(img_shape, latent_dim, 20, 40, n_classes).to(device)
 
     return encoder, decoder, classifier
