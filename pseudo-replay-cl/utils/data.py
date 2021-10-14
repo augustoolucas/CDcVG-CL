@@ -74,6 +74,7 @@ def get_tasks_labels(tasks):
 def get_task_data_shape(tasks):
     return tasks[0][0][0].shape
 
+
 def get_tasks_classes(tasks):
     classes = [class_ for task in tasks for class_ in set(task.targets.tolist())]
     return classes

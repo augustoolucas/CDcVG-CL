@@ -1,9 +1,12 @@
 import numpy as np
 import torch
-from torchvision import transforms
+from torchvision.transforms import ToPILImage
 from imageio import imwrite
 import matplotlib.pyplot as plt
 from PIL import Image
+
+def show_image(image):
+    ToPILImage()(image).show()
 
 def visualize(real_images, recon_images, gen_images, task_id, path):
     #cmap = 'gray' if args.channels == 1 else None
@@ -70,7 +73,7 @@ class plot_samples():
             i = int(idx % size[1])
             j = int(idx / size[1])
             
-            image_ = transforms.ToPILImage(mode='RGB')(image) if self.n_channels == 3 else transforms.ToPILImage()(image)
+            image_ = ToPILImage(mode='RGB')(image) if self.n_channels == 3 else ToPILImage()(image)
             image_ = np.array(image_.resize((w, h), Image.BICUBIC))
 
             img[j*h:j*h+h, i*w:i*w+w] = image_
