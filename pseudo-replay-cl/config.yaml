@@ -1,6 +1,8 @@
 ---
 ### Training parameters ###
 learning_rate: 1e-2
-n_replay: 5000 # per task
+latent_size: 32
+n_replay: 2500 # per class
 batch_size: 128
-epochs: 10
+epochs: 5
+exp_path: "Results/ConvAutoEncoder"
