@@ -6,12 +6,6 @@ import torch
 cuda = True if torch.cuda.is_available() else False
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
-def reparameterization(mu, logvar,latent_dim):
-    std = torch.exp(logvar / 2)
-    sampled_z = Variable(Tensor(np.random.normal(0, 1, (mu.size(0), latent_dim))))
-    z = sampled_z * std + mu
-    return z
-
 class Encoder(nn.Module):
     def __init__(self, img_shape, n_hidden, latent_dim):
         super(Encoder, self).__init__()
@@ -21,13 +15,13 @@ class Encoder(nn.Module):
         self.conv_block = nn.Sequential(
             nn.Conv2d(channels, 32, kernel_size=3, padding=1, stride=1),
             nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
+            nn.ELU(inplace=True),
             nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=2),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=1),
+            nn.ELU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=2),
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
+            nn.ELU(inplace=True),
         )
 
         """
@@ -38,18 +32,25 @@ class Encoder(nn.Module):
         )
         """
 
-        self.mu = nn.Linear(128*14*14, latent_dim)
-        self.logvar = nn.Linear(128*14*14, latent_dim)
+        self.mu = nn.Linear(128*7*7, latent_dim)
+        self.logvar = nn.Linear(128*7*7, latent_dim)
         self.latent_dim = latent_dim
+
+    def reparameterization(self, mu, logvar,latent_dim):
+        std = torch.exp(logvar / 2)
+        sampled_z = Variable(Tensor(np.random.normal(0, 1, (mu.size(0), latent_dim))))
+        z = sampled_z * std + mu
+        return z
         
     def forward(self, img):
         x = self.conv_block(img)
-        x = x.view(x.shape[0])
-        #x = self.linear_block(x, -1)
+        x = x.view(x.shape[0], -1)
+        #x = self.linear_block(x)
         mu = self.mu(x)
         logvar = self.logvar(x)
-        z = reparameterization(mu, logvar, self.latent_dim)
+        z = self.reparameterization(mu, logvar, self.latent_dim)
         return z, mu, logvar
+
 
 class Decoder(nn.Module):
     def __init__(self,img_shape, n_hidden, latent_dim, n_classes, use_label=True):
@@ -65,16 +66,16 @@ class Decoder(nn.Module):
             #nn.BatchNorm1d(n_hidden),
             #nn.ELU(inplace=True),
             #nn.Linear(n_hidden, 128*14*14),
-            nn.Linear(input_dim, 128*14*14),
-            nn.BatchNorm1d(128*14*14),
-            nn.ReLU(inplace=True),
+            nn.Linear(input_dim, 128*7*7),
+            nn.BatchNorm1d(128*7*7),
+            nn.ELU(inplace=True),
         )
 
         self.conv_block = nn.Sequential(
-            nn.ConvTranspose2d(128, 64, kernel_size=3, padding=1, stride=1),
+            nn.ConvTranspose2d(128, 64, kernel_size=3, padding=1, stride=2),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(64, 32, kernel_size=3, padding=1, stride=2),
+            nn.ConvTranspose2d(64, 32, kernel_size=3, padding=0, stride=2),
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
             nn.ConvTranspose2d(32, channels, kernel_size=2, padding=0, stride=1),
@@ -84,7 +85,7 @@ class Decoder(nn.Module):
 
     def forward(self, z):
         x = self.linear_block(z)
-        x = self.conv_block(x.view(-1, 128, 14, 14))
+        x = self.conv_block(x.view(-1, 128, 7, 7))
         return x
 
 
@@ -96,12 +97,13 @@ class Specific(nn.Module):
         # specific module
         self.specific = nn.Sequential(
             nn.Linear(int(np.prod(img_shape)), specific_n_hidden),
-            nn.LeakyReLU(inplace=True),
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, imgs):
         x = self.specific(imgs.view(imgs.shape[0], -1))
         return x
+
      
 class Classifier(nn.Module):
     def __init__(self, invariant_n_hidden, specific_n_hidden, classification_n_hidden, n_classes):

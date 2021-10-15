@@ -146,8 +146,10 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
 
     utils.plot.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
 
+
 def save_model(model, path, name):
     torch.save(model.state_dict(), f'{path}/{name}.pt')
+
 
 def main(config):
     torch.manual_seed(1)
@@ -169,8 +171,11 @@ def main(config):
     #encoder = models.ircl.Encoder(data_shape, 300, config['latent_size']).to(device)
     #decoder = models.ircl.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
 
+    ### ------ Loading convolutional Autoencoder ------ ###
     encoder = models.conv.Encoder(data_shape, 300, config['latent_size']).to(device)
     decoder = models.conv.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
+
+    ### ------ Loading Specific module and Classifier ------ ###
     specific = models.conv.Specific(data_shape, 20).to(device)
     classifier = models.conv.Classifier(config['latent_size'], 20, 40, n_classes).to(device)
 
@@ -223,11 +228,13 @@ def main(config):
 
 
     with open(config['exp_path']+'/output.log', 'w+') as f:
-        for acc in range(len(ACCs)):
-            print(f'Task {task} - Accuracy: {(acc)*100:.02f}%', file=f)
+        for task_id, acc in enumerate(ACCs):
+            print(f'Task {task_id} - Accuracy: {(acc)*100:.02f}%', file=f)
 
         print(f'Average accuracy: {(sum(ACCs)/n_tasks)*100:.02f}%', file=f)
         print(f'Average backward transfer: {(sum(BWTs)/(n_tasks-1))*100:.02f}%', file=f)
+    print(f'Average accuracy: {(sum(ACCs)/n_tasks)*100:.02f}%')
+    print(f'Average backward transfer: {(sum(BWTs)/(n_tasks-1))*100:.02f}%')
 
 def load_config(file):
     config = None
