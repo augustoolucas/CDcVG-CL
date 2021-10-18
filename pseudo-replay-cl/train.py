@@ -156,7 +156,8 @@ def main(config):
     os.environ['PYTHONHASHSEED'] = str(1)
     np.random.seed(1)
     ## ------ Load Data ------ ###
-    train_tasks, val_tasks, test_tasks = utils.data.load_tasks('MNIST', val=False)
+    train_tasks, val_tasks, test_tasks = utils.data.load_tasks(config['dataset'],
+                                                               val=False)
     data_shape = utils.data.get_task_data_shape(train_tasks)
     classes = utils.data.get_tasks_classes(train_tasks)
     tasks_labels = utils.data.get_tasks_labels(train_tasks)
