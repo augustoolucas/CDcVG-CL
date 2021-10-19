@@ -22,7 +22,16 @@ def load_data(dataset, val=False):
                                   download=True,
                                   train=False,
                                   transform=transforms.ToTensor())
+    elif dataset == 'CIFAR10':
+        train_set = datasets.CIFAR10(root='./Datasets',
+                                     download=True,
+                                     train=True,
+                                     transform=transforms.ToTensor())
 
+        test_set = datasets.CIFAR10(root='./Datasets',
+                                    download=True,
+                                    train=False,
+                                    transform=transforms.ToTensor())
     else:
         print('Invalid dataset.')
         exit()
@@ -45,21 +54,29 @@ def load_data(dataset, val=False):
 
 def load_tasks(dataset, val=False):
     train_set, val_set, test_set = load_data(dataset, val)
-    train_task = create_tasks(train_set)
-    val_task = create_tasks(val_set) if val else None
-    test_task = create_tasks(test_set)
+    train_tasks = create_tasks(train_set)
+    val_tasks = create_tasks(val_set) if val else None
+    test_tasks = create_tasks(test_set)
 
-    return train_task, val_task, test_task
+    return train_tasks, val_tasks, test_tasks
+
 
 def create_tasks(dataset):
-    n_classes = len(set(dataset.targets.tolist()))
+    if type(dataset.targets) is list:
+        n_classes = len(set(dataset.targets))
+    else:
+        n_classes = len(set(dataset.targets.tolist()))
+
     task_labels = [[x, x+1] for x in range(0, n_classes, 2)]
     datasets = []
 
     for labels in task_labels:
         idxs = np.in1d(dataset.targets, labels)
         task_set = copy.deepcopy(dataset)
-        task_set.targets = dataset.targets[idxs]
+        if type(dataset.targets) is list:
+            task_set.targets = np.array(dataset.targets)[idxs].tolist()
+        else:
+            task_set.targets = dataset.targets[idxs]
         task_set.data = dataset.data[idxs]
         datasets.append(task_set)
      
@@ -67,7 +84,7 @@ def create_tasks(dataset):
 
 
 def get_tasks_labels(tasks):
-    tasks_labels = [list(set(task.targets.tolist())) for task in tasks]
+    tasks_labels = [list(set(np.array(task.targets).tolist())) for task in tasks]
     return tasks_labels
 
 
@@ -76,18 +93,36 @@ def get_task_data_shape(tasks):
 
 
 def get_tasks_classes(tasks):
-    classes = [class_ for task in tasks for class_ in set(task.targets.tolist())]
+    classes = [class_ for task in tasks for class_ in set(np.array(task.targets).tolist())]
     return classes
 
 
 def get_dataloader(dataset, batch_size):
+    data_ndarray = False
+    targets_list = False
     if type(dataset) == list:
-        data = torch.tensor([], dtype=dataset[0].data.dtype)
-        targets = torch.tensor([])
+        if type(dataset[0].data) is np.ndarray:
+            data_ndarray = True
+            data = None
+        else:
+            data = torch.tensor([], dtype=dataset[0].data.dtype)
+
+        if type(dataset[0].targets) is list:
+            targets_list = True
+            targets= []
+        else:
+            targets = torch.tensor([])
 
         for ds in dataset:
-            data = torch.cat([data, ds.data])
-            targets = torch.cat([targets, ds.targets])
+            if data_ndarray:
+                data = np.vstack([data, ds.data]) if data is not None else ds.data
+            else:
+                data = torch.cat([data, ds.data])
+
+            if targets_list:
+                targets = targets + ds.targets
+            else:
+                targets = torch.cat([targets, ds.targets])
 
         dataset = copy.deepcopy(dataset[0])
         dataset.data = data
@@ -112,14 +147,24 @@ def update_train_set(dataset, new_images, new_labels):
             print('Unknown error')
             exit()
 
-    if dataset.data.dtype != new_images.dtype:
+    if dataset.data[0].shape != new_images[0].shape:
+        new_images = torch.swapaxes(new_images, 1, 2)#.reshape(shape)
+        new_images = torch.swapaxes(new_images, 2, 3)#.reshape(shape)
+
+    if type(dataset.data) is np.ndarray:
+        new_images = (new_images * 255).numpy().astype(dataset.data.dtype)
+    elif dataset.data.dtype != new_images.dtype:
         if dataset.data.dtype == torch.uint8 and new_images.dtype == torch.float32:
             new_images = (new_images * 255).type(dataset.data.dtype)
         else:
             print('Warning: Mismatched data types.')
 
-    dataset.data = torch.cat([dataset.data, new_images], dim=0)
-    dataset.targets = torch.cat([dataset.targets, new_labels], dim=0)
+    if type(dataset.data) is np.ndarray:
+        dataset.data = np.vstack([dataset.data, new_images])
+        dataset.targets += new_labels.tolist()
+    else:
+        dataset.data = torch.cat([dataset.data, new_images], dim=0)
+        dataset.targets = torch.cat([dataset.targets, new_labels], dim=0)
 
     return dataset
 

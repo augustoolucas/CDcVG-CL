@@ -32,8 +32,8 @@ class Encoder(nn.Module):
         )
         """
 
-        self.mu = nn.Linear(128*7*7, latent_dim)
-        self.logvar = nn.Linear(128*7*7, latent_dim)
+        self.mu = nn.Linear(128*8*8, latent_dim)
+        self.logvar = nn.Linear(128*8*8, latent_dim)
         self.latent_dim = latent_dim
 
     def reparameterization(self, mu, logvar,latent_dim):
@@ -53,7 +53,7 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self,img_shape, n_hidden, latent_dim, n_classes, use_label=True):
+    def __init__(self, img_shape, n_hidden, latent_dim, n_classes, use_label=True):
         super(Decoder, self).__init__()
 
         channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
@@ -66,8 +66,8 @@ class Decoder(nn.Module):
             #nn.BatchNorm1d(n_hidden),
             #nn.ELU(inplace=True),
             #nn.Linear(n_hidden, 128*14*14),
-            nn.Linear(input_dim, 128*7*7),
-            nn.BatchNorm1d(128*7*7),
+            nn.Linear(input_dim, 128*8*8),
+            nn.BatchNorm1d(128*8*8),
             nn.ELU(inplace=True),
         )
 
@@ -85,7 +85,7 @@ class Decoder(nn.Module):
 
     def forward(self, z):
         x = self.linear_block(z)
-        x = self.conv_block(x.view(-1, 128, 7, 7))
+        x = self.conv_block(x.view(-1, 128, 8, 8))
         return x
 
 

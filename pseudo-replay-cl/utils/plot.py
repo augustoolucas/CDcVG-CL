@@ -10,7 +10,7 @@ def show_image(image):
 
 def visualize(real_images, recon_images, gen_images, task_id, path):
     #cmap = 'gray' if args.channels == 1 else None
-    plotter = plot_samples('./', (28, 28, 1), 8, 8)
+    plotter = plot_samples('./', (32, 32, 3), 8, 8)
     cmap = 'gray'
     real_images = plotter.get_images(real_images[:64])
     recon_images = plotter.get_images(recon_images[:64])

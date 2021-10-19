@@ -81,7 +81,7 @@ def gen_recon_images(encoder, decoder, data_loader, device):
 def train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, tasks_labels, task_id, device):
     ### ------ Optimizers ------ ###
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
-                                      lr=float(config['learning_rate'])/10)
+                                      lr=float(config['learning_rate']))
     optimizer_specific = torch.optim.Adam(specific.parameters(),
                                           lr=float(config['learning_rate'])/50)
     optimizer_classifier = torch.optim.Adam(classifier.parameters(),
@@ -169,12 +169,12 @@ def main(config):
     print(f'Device: {device}')
 
     ### ------ Loading IRCL Models ------ ###
-    #encoder = models.ircl.Encoder(data_shape, 300, config['latent_size']).to(device)
-    #decoder = models.ircl.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
+    encoder = models.ircl.Encoder(data_shape, 300, config['latent_size']).to(device)
+    decoder = models.ircl.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
 
     ### ------ Loading convolutional Autoencoder ------ ###
-    encoder = models.conv.Encoder(data_shape, 300, config['latent_size']).to(device)
-    decoder = models.conv.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
+    #encoder = models.conv.Encoder(data_shape, 300, config['latent_size']).to(device)
+    #decoder = models.conv.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
 
     ### ------ Loading Specific module and Classifier ------ ###
     specific = models.conv.Specific(data_shape, 20).to(device)

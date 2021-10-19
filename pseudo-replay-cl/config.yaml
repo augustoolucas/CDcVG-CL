@@ -4,6 +4,6 @@ learning_rate: 1e-2
 latent_size: 32
 n_replay: 2500 # per class
 batch_size: 128
-dataset: "MNIST"
+dataset: "CIFAR10"
 epochs: 5
-exp_path: "Results/MNIST/ConvAutoEncoder"
+exp_path: "Results/CIFAR10/5 epochs/IRCLAutoEncoder"
