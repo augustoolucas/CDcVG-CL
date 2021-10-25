@@ -81,7 +81,7 @@ def gen_recon_images(encoder, decoder, data_loader, device):
 def train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, tasks_labels, task_id, device):
     ### ------ Optimizers ------ ###
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
-                                      lr=float(config['learning_rate']))
+                                      lr=float(config['learning_rate'])/10)
     optimizer_specific = torch.optim.Adam(specific.parameters(),
                                           lr=float(config['learning_rate'])/50)
     optimizer_classifier = torch.optim.Adam(classifier.parameters(),
@@ -142,7 +142,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
         train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - Loss: {(batch_loss/len(train_loader)):.03f} - Accuracy: {(batch_acc/len(train_loader))*100:.03f}% - Val Accuracy: {(val_acc)*100:.03f}%')
 
     real_images, recon_images = gen_recon_images(encoder, decoder, val_loader, device)
-    gen_images, _ = gen_pseudo_samples(128, tasks_labels, decoder, 10, 32, device)
+    gen_images, _ = gen_pseudo_samples(128, tasks_labels, decoder, 10, config['latent_size'], device)
 
     utils.plot.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
 
@@ -173,12 +173,13 @@ def main(config):
     decoder = models.ircl.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
 
     ### ------ Loading convolutional Autoencoder ------ ###
-    #encoder = models.conv.Encoder(data_shape, 300, config['latent_size']).to(device)
-    #decoder = models.conv.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
+    #encoder = models.conv.Encoder(data_shape, config['latent_size']).to(device)
+    #decoder = models.conv.Decoder(data_shape, config['latent_size'], n_classes).to(device)
 
     ### ------ Loading Specific module and Classifier ------ ###
-    specific = models.conv.Specific(data_shape, 20).to(device)
-    classifier = models.conv.Classifier(config['latent_size'], 20, 40, n_classes).to(device)
+    #specific = models.conv.Specific(data_shape, 20).to(device)
+    specific = models.mlp.Specific(data_shape, 20).to(device)
+    classifier = models.mlp.Classifier(config['latent_size'], 20, 40, n_classes).to(device)
 
     acc_of_task_t_at_time_t = []
 
@@ -192,7 +193,7 @@ def main(config):
                                                         tasks_labels[:task],
                                                         decoder,
                                                         n_classes,
-                                                        32,
+                                                        config['latent_size'],
                                                         device)
 
             train_set = utils.data.update_train_set(train_set,
@@ -237,6 +238,7 @@ def main(config):
     print(f'Average accuracy: {(sum(ACCs)/n_tasks)*100:.02f}%')
     print(f'Average backward transfer: {(sum(BWTs)/(n_tasks-1))*100:.02f}%')
 
+
 def load_config(file):
     config = None
     with open(file, 'r') as reader:
@@ -244,10 +246,24 @@ def load_config(file):
 
     return config
 
+
+def get_path(config):
+    path = '/'.join([config['root'], config['dataset'], str(config['epochs']) + ' epochs', config['exp_name']])
+
+    aux_path
+    for folder in path.split('/')[:-1]:
+        aux_path = aux_path + folder + '/'
+        if not Path(aux_path).is_dir():
+            os.mkdir(aux_path)
+
+    return path
+
+
 if __name__ == '__main__':
     for idx in range(1):
         config = load_config('config.yaml')
-        config['exp_path'] = config['exp_path'] + '_' + str(idx)
+        exp_path = get_path(config)
+        config['exp_path'] = exp_path + '_' + str(idx)
         if not Path(config['exp_path']).is_dir():
             os.mkdir(config['exp_path'])
         main(config)
