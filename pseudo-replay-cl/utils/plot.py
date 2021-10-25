@@ -9,9 +9,10 @@ def show_image(image):
     ToPILImage()(image).show()
 
 def visualize(real_images, recon_images, gen_images, task_id, path):
-    #cmap = 'gray' if args.channels == 1 else None
-    plotter = plot_samples('./', (32, 32, 3), 8, 8)
-    cmap = 'gray'
+    shape = gen_images[0].shape
+    shape = shape if shape[0] > shape[2] else (shape[1], shape[2], shape[0])
+    cmap = 'gray' if shape[2] == 1 else None
+    plotter = plot_samples('./', shape, 8, 8)
     real_images = plotter.get_images(real_images[:64])
     recon_images = plotter.get_images(recon_images[:64])
     gen_images = plotter.get_images(gen_images[:64])
@@ -42,7 +43,7 @@ def visualize(real_images, recon_images, gen_images, task_id, path):
 
 class plot_samples():
     def __init__(self, DIR, img_shape, n_img_x=8, n_img_y=8):
-        img_w, img_h, n_channels = img_shape
+        img_w, img_h, n_channels = img_shape if img_shape[0] > img_shape[2] else (img_shape[1], img_shape[2], img_shape[0])
         self.DIR = DIR
         assert n_img_x > 0 and n_img_y > 0
         self.n_img_x = n_img_x
@@ -72,7 +73,7 @@ class plot_samples():
         for idx, image in enumerate(images):
             i = int(idx % size[1])
             j = int(idx / size[1])
-            
+
             image_ = ToPILImage(mode='RGB')(image) if self.n_channels == 3 else ToPILImage()(image)
             image_ = np.array(image_.resize((w, h), Image.BICUBIC))
 
