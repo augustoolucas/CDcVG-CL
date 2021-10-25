@@ -32,6 +32,16 @@ def load_data(dataset, val=False):
                                     download=True,
                                     train=False,
                                     transform=transforms.ToTensor())
+    elif dataset == 'FashionMNIST':
+        train_set = datasets.FashionMNIST(root='./Datasets',
+                                          download=True,
+                                          train=True,
+                                          transform=transforms.ToTensor())
+
+        test_set = datasets.FashionMNIST(root='./Datasets',
+                                         download=True,
+                                         train=False,
+                                         transform=transforms.ToTensor())
     else:
         print('Invalid dataset.')
         exit()
