@@ -21,10 +21,7 @@ def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, devi
     labels = [label for labels in tasks_labels for label in labels]
     for label in labels:
         y = torch.ones(size=[n_gen], dtype=torch.int64) * label
-        if label == 0:
-            new_labels = y
-        else:
-            new_labels = torch.cat((new_labels, y))
+        new_labels = y if label == 0 else torch.cat((new_labels, y))
 
     new_labels = new_labels[torch.randperm(new_labels.size(0))] # Shuffling the Tensor
     new_labels_onehot = utils.data.onehot_encoder(new_labels, n_classes)
