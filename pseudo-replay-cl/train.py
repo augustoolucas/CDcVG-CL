@@ -176,11 +176,14 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device):
                 latents_list.append(latent.cpu().numpy())
                 combined_list.append(torch.cat([latent, spcf], dim=0).cpu().numpy())
                 labels_list.append(label.cpu().tolist())
+    
+    mlp_acc = 100*accuracy_score(labels_list, classifier_out_list)
 
     knn_output = knn.predict(combined_list)
+    knn_acc = 100*accuracy_score(labels_list, knn_output)
     with open(f'{path}/output.log', 'a') as f:
-        print(f'KNN Accuracy: {(100*accuracy_score(labels_list, knn_output)):.02f}%', file=f)
-    print(f'KNN Accuracy: {(100*accuracy_score(labels_list, knn_output)):.02f}%')
+        print(f'KNN Accuracy: {knn_acc:.02f}%', file=f)
+    print(f'KNN Accuracy: {knn_acc:.02f}%')
 
     plt_path = 'Plots'
     if not Path(f'{path}/{plt_path}').is_dir():
@@ -188,15 +191,20 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device):
 
     tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
     tsne_results = tsne.fit_transform(latents_list)
-    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/latents-tsne.png')
+    title = f'Latent Invariant Representation - Real Labels'
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/latents-tsne.png', title)
 
     tsne_results = tsne.fit_transform(specific_list)
-    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/specific-tsne.png')
+    title = f'Specific Representation - Real Labels'
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/specific-tsne.png', title)
 
     tsne_results = tsne.fit_transform(combined_list)
-    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/combined-tsne.png')
-    utils.plot.tsne_plot(tsne_results, classifier_out_list, f'{path}/{plt_path}/combined-cls-tsne.png')
-    utils.plot.tsne_plot(tsne_results, knn_output, f'{path}/{plt_path}/combined-knn-tsne.png')
+    title = f'Combined Representation - Real Labels'
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/combined-tsne.png', title)
+    title = f'Combined Representation - MLP Classifier Output - Accuracy: {mlp_acc:.02f}%'
+    utils.plot.tsne_plot(tsne_results, classifier_out_list, f'{path}/{plt_path}/combined-cls-tsne.png', title)
+    title = f'Combined Representation - KNN Output - Accuracy: {knn_acc:.02f}%'
+    utils.plot.tsne_plot(tsne_results, knn_output, f'{path}/{plt_path}/combined-knn-tsne.png', title)
 
 
 def knn(encoder, specific, classifier, train_loader, device):
