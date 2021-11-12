@@ -1,12 +1,22 @@
-import numpy as np
 import torch
-from torchvision.transforms import ToPILImage
-from imageio import imwrite
+import numpy as np
+import seaborn as sns
 import matplotlib.pyplot as plt
 from PIL import Image
+from imageio import imwrite
+from torchvision.transforms import ToPILImage
 
 def show_image(image):
     ToPILImage()(image).show()
+
+
+def tsne_plot(tsne_results, labels, path):
+    plt.figure(figsize=(16,10))
+    sns.scatterplot(x=tsne_results[:,0], y=tsne_results[:,1], hue=labels, legend='full', palette=sns.color_palette('hls', len(set(labels))))
+    plt.savefig(dpi=400,
+                fname=path,
+                bbox_inches='tight')
+    plt.close()
 
 def visualize(real_images, recon_images, gen_images, task_id, path):
     shape = gen_images[0].shape
