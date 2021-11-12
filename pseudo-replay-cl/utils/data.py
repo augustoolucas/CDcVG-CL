@@ -64,14 +64,14 @@ def load_data(dataset, val=False):
 
 def load_tasks(dataset, val=False):
     train_set, val_set, test_set = load_data(dataset, val)
-    train_tasks = create_tasks(train_set)
-    val_tasks = create_tasks(val_set) if val else None
-    test_tasks = create_tasks(test_set)
+    train_tasks = create_task(train_set)
+    val_tasks = create_task(val_set) if val else None
+    test_tasks = create_task(test_set)
 
     return train_tasks, val_tasks, test_tasks
 
 
-def create_tasks(dataset):
+def create_task(dataset):
     if type(dataset.targets) is list:
         n_classes = len(set(dataset.targets))
     else:

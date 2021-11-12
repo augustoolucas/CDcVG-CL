@@ -7,7 +7,7 @@ cuda = True if torch.cuda.is_available() else False
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
 class Encoder(nn.Module):
-    def __init__(self, img_shape, n_hidden, latent_dim):
+    def __init__(self, img_shape, latent_dim):
         super(Encoder, self).__init__()
 
         channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
@@ -53,7 +53,7 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, img_shape, n_hidden, latent_dim, n_classes, use_label=True):
+    def __init__(self,img_shape, latent_dim, n_classes, use_label=True):
         super(Decoder, self).__init__()
 
         channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
@@ -90,36 +90,30 @@ class Decoder(nn.Module):
 
 
 class Specific(nn.Module):
-    def __init__(self, img_shape, specific_n_hidden):
+    def __init__(self, img_shape, latent_dim):
         super(Specific, self).__init__()
 
         channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
-        # specific module
-        self.specific = nn.Sequential(
-            nn.Linear(int(np.prod(img_shape)), specific_n_hidden),
-            nn.ReLU(inplace=True),
+
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(channels, 32, kernel_size=3, padding=1, stride=1),
+            nn.BatchNorm2d(32),
+            nn.ELU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=2),
+            nn.BatchNorm2d(64),
+            nn.ELU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=2),
+            nn.BatchNorm2d(128),
+            nn.ELU(inplace=True),
+        )
+        
+        self.linear_block = nn.Sequential(
+            nn.Linear(128*8*8, latent_dim),
+            nn.ReLU(inplace=True)
         )
 
-    def forward(self, imgs):
-        x = self.specific(imgs.view(imgs.shape[0], -1))
+    def forward(self, img):
+        x = self.conv_block(img)
+        x = x.view(x.shape[0], -1)
+        x = self.linear_block(x)
         return x
-
-     
-class Classifier(nn.Module):
-    def __init__(self, invariant_n_hidden, specific_n_hidden, classification_n_hidden, n_classes):
-        super(Classifier, self).__init__()
-
-        # classification module
-        self.classifier_layer = nn.Sequential(
-            nn.Linear(specific_n_hidden + invariant_n_hidden, classification_n_hidden),
-            nn.ReLU(inplace=True),
-        )
-
-        self.output = nn.Sequential(
-            nn.Linear(classification_n_hidden, n_classes),
-        )
-
-    def forward(self, discriminative, invariant):
-        x = self.classifier_layer(torch.cat([discriminative, invariant], dim=1))
-        logits = self.output(x)
-        return logits

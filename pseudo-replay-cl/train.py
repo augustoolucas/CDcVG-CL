@@ -1,15 +1,21 @@
-from tqdm import tqdm
-from pathlib import Path
-from sklearn.metrics import accuracy_score, precision_score
 import os
 import yaml
 import copy
 import torch
 import models
+import random
 import utils.data
 import utils.plot
 import numpy as np
+import seaborn as sns
 import matplotlib.pyplot as plt
+from tqdm import tqdm
+from pathlib import Path
+from sklearnex import patch_sklearn
+patch_sklearn()
+from sklearn.manifold import TSNE
+from sklearn.neighbors import KNeighborsClassifier as KNN
+from sklearn.metrics import accuracy_score, precision_score
 
 def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, device):
     labels = [label for labels in tasks_labels for label in labels]
@@ -81,11 +87,11 @@ def gen_recon_images(encoder, decoder, data_loader, device):
 def train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, tasks_labels, task_id, device):
     ### ------ Optimizers ------ ###
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
-                                      lr=float(config['learning_rate'])/10)
+                                      lr=float(config['autoencoder_lr']))
     optimizer_specific = torch.optim.Adam(specific.parameters(),
-                                          lr=float(config['learning_rate'])/50)
+                                          lr=float(config['specific_lr']))
     optimizer_classifier = torch.optim.Adam(classifier.parameters(),
-                                            lr=float(config['learning_rate'])/50)
+                                            lr=float(config['classifier_lr']))
 
     ### ------ Losses ------ ###
     pixelwise_loss = torch.nn.MSELoss(reduction='sum')
@@ -94,17 +100,22 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
 
     train_bar = tqdm(range(config['epochs']))
 
+    imgs_list = []
+    labels_list = []
     for epoch in train_bar:
-        encoder.train()
-        decoder.train()
-        specific.train()
-        classifier.train()
         batch_loss = 0
         batch_acc = 0
         for batch_idx, (images, labels) in enumerate(train_loader, start=1):
+            imgs_list.append(images)
+            encoder.train()
+            decoder.train()
+            specific.train()
+            classifier.train()
             ### ------ Training autoencoder ------ ###
             encoder.zero_grad()
             decoder.zero_grad()
+            specific.zero_grad()
+            classifier.zero_grad()
 
             labels_onehot = utils.data.onehot_encoder(labels, 10).to(device)
             images, labels = images.to(device), labels.to(device)
@@ -119,12 +130,12 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             optimizer_cvae.step()
 
             ### ------ Training specific module and classifier ------ ###
+            encoder.eval()
+            decoder.eval()
             encoder.zero_grad()
             decoder.zero_grad()
             specific.zero_grad()
             classifier.zero_grad()
-
-            #latents, _, _ = encoder(images)
 
             specific_output = specific(images)
             classifier_output = classifier(specific_output, latents.detach())
@@ -136,7 +147,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             output_list = torch.argmax(classifier_output, dim=1).tolist()
             batch_acc += accuracy_score(output_list, labels.detach().cpu().numpy())
             batch_loss += cvae_loss + classifier_loss
-    
+
         val_acc = test(encoder, specific, classifier, val_loader, device)
         
         train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - Loss: {(batch_loss/len(train_loader)):.03f} - Accuracy: {(batch_acc/len(train_loader))*100:.03f}% - Val Accuracy: {(val_acc)*100:.03f}%')
@@ -147,13 +158,84 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     utils.plot.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
 
 
+def sne(path, encoder, specific, classifier, knn, data_loader, device):
+    encoder.eval()
+    specific.eval()
+
+    with torch.no_grad():
+        specific_list = []
+        latents_list = []
+        labels_list = []
+        combined_list = []
+        classifier_out_list = []
+        for images, labels in data_loader:
+            images = images.to(device)
+            latents, _, _ = encoder(images)
+            specific_output = specific(images)
+            classifier_output = classifier(specific_output, latents.detach())
+            classifier_out_list.extend(torch.argmax(classifier_output, dim=1).cpu().tolist())
+            for latent, label, spcf in zip(latents, labels, specific_output):
+                specific_list.append(spcf.cpu().numpy())
+                latents_list.append(latent.cpu().numpy())
+                combined_list.append(torch.cat([latent, spcf], dim=0).cpu().numpy())
+                labels_list.append(label.cpu().tolist())
+
+    knn_output = knn.predict(combined_list)
+    with open(f'{path}/output.log', 'a') as f:
+        print(f'KNN Accuracy: {(100*accuracy_score(labels_list, knn_output)):.02f}%', file=f)
+    print(f'KNN Accuracy: {(100*accuracy_score(labels_list, knn_output)):.02f}%')
+
+    plt_path = 'Plots'
+    if not Path(f'{path}/{plt_path}').is_dir():
+        os.mkdir(f'{path}/{plt_path}')
+
+    tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
+    tsne_results = tsne.fit_transform(latents_list)
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/latents-tsne.png')
+
+    tsne_results = tsne.fit_transform(specific_list)
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/specific-tsne.png')
+
+    tsne_results = tsne.fit_transform(combined_list)
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/combined-tsne.png')
+    utils.plot.tsne_plot(tsne_results, classifier_out_list, f'{path}/{plt_path}/combined-cls-tsne.png')
+    utils.plot.tsne_plot(tsne_results, knn_output, f'{path}/{plt_path}/combined-knn-tsne.png')
+
+
+def knn(encoder, specific, classifier, train_loader, device):
+    encoder.eval()
+    classifier.eval()
+    specific.eval()
+
+    batch_acc = 0
+    knn = KNN(n_neighbors=3, n_jobs=-1)
+    with torch.no_grad():
+        combined_list = []
+        labels_list = []
+        for images, labels in train_loader:
+            images = images.to(device)
+            latents, _, _ = encoder(images)
+            specific_output = specific(images)
+            for latent, label, spcf in zip(latents, labels, specific_output):
+                combined_list.append(torch.cat([latent, spcf], dim=0).cpu().numpy())
+                labels_list.append(label.cpu().tolist())
+
+        knn.fit(combined_list, labels_list)
+    
+    return knn
+
+
 def save_model(model, path, name):
     torch.save(model.state_dict(), f'{path}/{name}.pt')
 
 
 def main(config):
     torch.manual_seed(1)
-    os.environ['PYTHONHASHSEED'] = str(1)
+    torch.cuda.manual_seed(1)
+    os.environ['PYTHONHASHSEED']=str(1)
+    random.seed(1)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     np.random.seed(1)
     ## ------ Load Data ------ ###
     train_tasks, val_tasks, test_tasks = utils.data.load_tasks(config['dataset'],
@@ -169,16 +251,24 @@ def main(config):
     print(f'Device: {device}')
 
     ### ------ Loading IRCL Models ------ ###
-    encoder = models.ircl.Encoder(data_shape, 300, config['latent_size']).to(device)
-    decoder = models.ircl.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
+    assert config['specific_arch'] in ['MLP', 'Conv']
+    assert config['encoder_arch'] in ['IRCL', 'Conv']
+    assert config['decoder_arch'] in ['IRCL', 'Conv']
+    if config['specific_arch'] == 'MLP':
+        specific = models.mlp.Specific(data_shape, 20).to(device)
+    elif config['specific_arch'] == 'Conv':
+        specific = models.conv.Specific(data_shape, 20).to(device)
 
-    ### ------ Loading convolutional Autoencoder ------ ###
-    #encoder = models.conv.Encoder(data_shape, config['latent_size']).to(device)
-    #decoder = models.conv.Decoder(data_shape, config['latent_size'], n_classes).to(device)
+    if config['encoder_arch'] == 'IRCL':
+        encoder = models.ircl.Encoder(data_shape, 300, config['latent_size']).to(device)
+    elif config['encoder_arch'] == 'Conv':
+        encoder = models.conv.Encoder(data_shape, config['latent_size']).to(device)
 
-    ### ------ Loading Specific module and Classifier ------ ###
-    #specific = models.conv.Specific(data_shape, 20).to(device)
-    specific = models.mlp.Specific(data_shape, 20).to(device)
+    if config['decoder_arch'] == 'IRCL':
+        decoder = models.ircl.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
+    elif config['decoder_arch'] == 'Conv':
+        decoder = models.conv.Decoder(data_shape, config['latent_size'], n_classes).to(device)
+
     classifier = models.mlp.Classifier(config['latent_size'], 20, 40, n_classes).to(device)
 
     acc_of_task_t_at_time_t = []
@@ -213,9 +303,9 @@ def main(config):
         acc = test(encoder, specific, classifier, test_loader, device)
         acc_of_task_t_at_time_t.append(acc)
 
-    save_model(encoder, config['exp_path'], 'encoder')
-    save_model(decoder, config['exp_path'], 'decoder')
-    save_model(classifier, config['exp_path'], 'classifier')
+    #save_model(encoder, config['exp_path'], 'encoder')
+    #save_model(decoder, config['exp_path'], 'decoder')
+    #save_model(classifier, config['exp_path'], 'classifier')
 
     ### ------ Testing tasks ask after training all of them ------ ###
 
@@ -238,6 +328,11 @@ def main(config):
     print(f'Average accuracy: {(sum(ACCs)/n_tasks)*100:.02f}%')
     print(f'Average backward transfer: {(sum(BWTs)/(n_tasks-1))*100:.02f}%')
 
+    train_loader = utils.data.get_dataloader(train_tasks, config['batch_size'])
+    test_loader = utils.data.get_dataloader(test_tasks, batch_size=1000)
+    knn_ = knn(encoder, specific, classifier, train_loader, device)
+    sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, device)
+
 
 def load_config(file):
     config = None
@@ -247,11 +342,13 @@ def load_config(file):
     return config
 
 
-def get_path(config):
-    path = '/'.join([config['root'], config['dataset'], str(config['epochs']) + ' epochs', config['exp_name']])
+def get_path(config, idx):
+    folder = f'{config["specific_arch"]}S+{config["encoder_arch"]}E+{config["decoder_arch"]}D'
+    subfolder = str(idx) if config['exp_name'] == '' else f'{config["exp_name"]}_{idx}'
+    path = '/'.join([config['root'], config['dataset'], str(config['epochs']) + ' epochs', folder, subfolder])
 
-    aux_path
-    for folder in path.split('/')[:-1]:
+    aux_path = ''
+    for folder in path.split('/'):
         aux_path = aux_path + folder + '/'
         if not Path(aux_path).is_dir():
             os.mkdir(aux_path)
@@ -260,10 +357,7 @@ def get_path(config):
 
 
 if __name__ == '__main__':
-    for idx in range(1):
-        config = load_config('config.yaml')
-        exp_path = get_path(config)
-        config['exp_path'] = exp_path + '_' + str(idx)
-        if not Path(config['exp_path']).is_dir():
-            os.mkdir(config['exp_path'])
+    config = load_config('config.yaml')
+    for idx in range(config['runs']):
+        config['exp_path'] = get_path(config, idx)
         main(config)
