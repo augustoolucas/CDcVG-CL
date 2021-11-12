@@ -10,10 +10,11 @@ def show_image(image):
     ToPILImage()(image).show()
 
 
-def tsne_plot(tsne_results, labels, path):
+def tsne_plot(tsne_results, labels, path, title=''):
     plt.figure(figsize=(16,10))
     sns.scatterplot(x=tsne_results[:,0], y=tsne_results[:,1], hue=labels, legend='full', palette=sns.color_palette('hls', len(set(labels))))
-    plt.savefig(dpi=400,
+    plt.title(title)
+    plt.savefig(dpi=150,
                 fname=path,
                 bbox_inches='tight')
     plt.close()
