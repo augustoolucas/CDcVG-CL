@@ -171,11 +171,10 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device):
             specific_output = specific(images)
             classifier_output = classifier(specific_output, latents.detach())
             classifier_out_list.extend(torch.argmax(classifier_output, dim=1).cpu().tolist())
-            for latent, label, spcf in zip(latents, labels, specific_output):
-                specific_list.append(spcf.cpu().numpy())
-                latents_list.append(latent.cpu().numpy())
-                combined_list.append(torch.cat([latent, spcf], dim=0).cpu().numpy())
-                labels_list.append(label.cpu().tolist())
+            specific_list.extend(specific_output.cpu().tolist())
+            latents_list.extend(latents.cpu().tolist())
+            labels_list.extend(labels.cpu().tolist())
+            combined_list.extend(torch.cat([latents, specific_output], dim=1).cpu().tolist())
     
     mlp_acc = 100*accuracy_score(labels_list, classifier_out_list)
 
@@ -221,9 +220,8 @@ def knn(encoder, specific, classifier, train_loader, device):
             images = images.to(device)
             latents, _, _ = encoder(images)
             specific_output = specific(images)
-            for latent, label, spcf in zip(latents, labels, specific_output):
-                combined_list.append(torch.cat([latent, spcf], dim=0).cpu().numpy())
-                labels_list.append(label.cpu().tolist())
+            combined_list.extend(torch.cat([latents, specific_output], dim=1).cpu().numpy())
+            labels_list.extend(labels.cpu().tolist())
 
         knn.fit(combined_list, labels_list)
     
