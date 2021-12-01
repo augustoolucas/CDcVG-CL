@@ -14,6 +14,7 @@ from pathlib import Path
 from sklearnex import patch_sklearn
 patch_sklearn()
 from sklearn.manifold import TSNE
+from matplotlib.ticker import MaxNLocator
 from sklearn.neighbors import KNeighborsClassifier as KNN
 from sklearn.metrics import accuracy_score, precision_score
 
@@ -99,6 +100,9 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
 
     imgs_list = []
     labels_list = []
+    cvae_loss_epochs = []
+    classifier_loss_epochs = []
+    total_loss_epochs = []
     for epoch in train_bar:
         batch_loss = 0
         batch_acc = 0
@@ -145,12 +149,30 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             batch_acc += accuracy_score(output_list, labels.detach().cpu().numpy())
             batch_loss += cvae_loss + classifier_loss
 
+        cvae_loss_epochs.append(cvae_loss.item())
+        classifier_loss_epochs.append(classifier_loss.item())
+        total_loss_epochs.append(batch_loss.item())
         val_acc = test(encoder, specific, classifier, val_loader, device)
         
         train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - Loss: {(batch_loss/len(train_loader)):.03f} - Accuracy: {(batch_acc/len(train_loader))*100:.03f}% - Val Accuracy: {(val_acc)*100:.03f}%')
 
     real_images, recon_images = gen_recon_images(encoder, decoder, val_loader, device)
     gen_images, _ = gen_pseudo_samples(128, tasks_labels, decoder, 10, config['latent_size'], device)
+
+    fig = plt.figure()
+    plt.scatter(list(range(len(cvae_loss_epochs))), cvae_loss_epochs)
+    plt.plot(list(range(len(cvae_loss_epochs))), cvae_loss_epochs, linestyle='dashed', alpha=0.25)
+    ax = fig.gca()
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    for i,j in enumerate(cvae_loss_epochs):
+        ax.annotate(f'{j:.02f}', xy=(i-i*0.05, j+(max(cvae_loss_epochs) - min(cvae_loss_epochs))*0.02))
+    plt.ylim(top=max(cvae_loss_epochs) + (max(cvae_loss_epochs) - min(cvae_loss_epochs))*0.1)
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title(f'Task {task_id}')
+    plt.savefig(dpi=200,
+                fname=f'{config["exp_path"]}/Plots/task_{task_id}-loss.png',
+                bbox_inches='tight')
 
     utils.plot.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
 
@@ -185,8 +207,6 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device):
     print(f'KNN Accuracy: {knn_acc:.02f}%')
 
     plt_path = 'Plots'
-    if not Path(f'{path}/{plt_path}').is_dir():
-        os.mkdir(f'{path}/{plt_path}')
 
     tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
     tsne_results = tsne.fit_transform(latents_list)
@@ -321,6 +341,21 @@ def main(config):
         ACCs.append(task_acc)
         BWTs.append(task_acc - acc_of_task_t_at_time_t[task])
 
+    plt_path = 'Plots'
+    fig = plt.figure()
+    plt.scatter(list(range(len(ACCs))), ACCs)
+    plt.plot(list(range(len(ACCs))), ACCs, linestyle='dashed', alpha=0.25)
+    ax = fig.gca()
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    for i,j in zip(list(range(len(ACCs))),ACCs):
+        ax.annotate(f'{j:.02f}', xy=(i-0.15, j+max(ACCs)*0.025))
+    plt.ylim(0, 1)
+    plt.xlabel('Task')
+    plt.ylabel('Accuracy')
+    plt.title('Test loss')
+    plt.savefig(dpi=200,
+                fname=f'{config["exp_path"]}/{plt_path}/tasks-loss.png',
+                bbox_inches='tight')
 
     with open(config['exp_path']+'/output.log', 'w+') as f:
         for task_id, acc in enumerate(ACCs):
@@ -355,6 +390,10 @@ def get_path(config, idx):
         aux_path = aux_path + folder + '/'
         if not Path(aux_path).is_dir():
             os.mkdir(aux_path)
+
+    plt_path = 'Plots'
+    if not Path(f'{path}/{plt_path}').is_dir():
+        os.mkdir(f'{path}/{plt_path}')
 
     return path
 
