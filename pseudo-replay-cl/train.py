@@ -99,7 +99,6 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     train_bar = tqdm(range(config['epochs']))
 
     imgs_list = []
-    labels_list = []
     cvae_loss_epochs = []
     classifier_loss_epochs = []
     total_loss_epochs = []
@@ -108,15 +107,10 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
         batch_acc = 0
         for batch_idx, (images, labels) in enumerate(train_loader, start=1):
             imgs_list.append(images)
-            encoder.train()
-            decoder.train()
-            specific.train()
-            classifier.train()
+            encoder.train(); decoder.train(); specific.train(); classifier.train()
             ### ------ Training autoencoder ------ ###
-            encoder.zero_grad()
-            decoder.zero_grad()
-            specific.zero_grad()
-            classifier.zero_grad()
+            encoder.zero_grad(); decoder.zero_grad()
+            specific.zero_grad(); classifier.zero_grad()
 
             labels_onehot = utils.data.onehot_encoder(labels, 10).to(device)
             images, labels = images.to(device), labels.to(device)
@@ -131,12 +125,9 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             optimizer_cvae.step()
 
             ### ------ Training specific module and classifier ------ ###
-            encoder.eval()
-            decoder.eval()
-            encoder.zero_grad()
-            decoder.zero_grad()
-            specific.zero_grad()
-            classifier.zero_grad()
+            encoder.eval(); decoder.eval()
+            encoder.zero_grad(); decoder.zero_grad()
+            specific.zero_grad(); classifier.zero_grad()
 
             specific_output = specific(images)
             classifier_output = classifier(specific_output, latents.detach())
@@ -154,7 +145,10 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
         total_loss_epochs.append(batch_loss.item())
         val_acc = test(encoder, specific, classifier, val_loader, device)
         
-        train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - Loss: {(batch_loss/len(train_loader)):.03f} - Accuracy: {(batch_acc/len(train_loader))*100:.03f}% - Val Accuracy: {(val_acc)*100:.03f}%')
+        train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - '
+                                  f'Loss: {(batch_loss/len(train_loader)):.03f} - '
+                                  f'Accuracy: {(batch_acc/len(train_loader))*100:.03f}% - '
+                                  f'Val Accuracy: {(val_acc)*100:.03f}%')
 
     real_images, recon_images = gen_recon_images(encoder, decoder, val_loader, device)
     gen_images, _ = gen_pseudo_samples(128, tasks_labels, decoder, 10, config['latent_size'], device)
@@ -165,13 +159,15 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     ax = fig.gca()
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     for i,j in enumerate(cvae_loss_epochs):
-        ax.annotate(f'{j:.02f}', xy=(i-i*0.05, j+(max(cvae_loss_epochs) - min(cvae_loss_epochs))*0.02))
+        ax.annotate(f'{j:.02f}',
+                    xy=(i-config['epochs']*0.01, j+(max(cvae_loss_epochs) - min(cvae_loss_epochs))*0.02),
+                    fontsize=4.5)
     plt.ylim(top=max(cvae_loss_epochs) + (max(cvae_loss_epochs) - min(cvae_loss_epochs))*0.1)
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title(f'Task {task_id}')
-    plt.savefig(dpi=200,
-                fname=f'{config["exp_path"]}/Plots/task_{task_id}-loss.png',
+    plt.savefig(dpi=300,
+                fname=f'{config["exp_path"]}/Plots/task_{task_id}-cvae-loss.png',
                 bbox_inches='tight')
 
     utils.plot.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
@@ -347,13 +343,15 @@ def main(config):
     plt.plot(list(range(len(ACCs))), ACCs, linestyle='dashed', alpha=0.25)
     ax = fig.gca()
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    for i,j in zip(list(range(len(ACCs))),ACCs):
-        ax.annotate(f'{j:.02f}', xy=(i-0.15, j+max(ACCs)*0.025))
-    plt.ylim(0, 1)
+    for i,j in enumerate(ACCs):
+        ax.annotate(f'{j:.02f}',
+                    xy=(i-len(ACCs)*0.025, j+max(ACCs)*0.025),
+                    fontsize=8)
+    plt.ylim(0.05, 1.05)
     plt.xlabel('Task')
     plt.ylabel('Accuracy')
     plt.title('Test loss')
-    plt.savefig(dpi=200,
+    plt.savefig(dpi=300,
                 fname=f'{config["exp_path"]}/{plt_path}/tasks-loss.png',
                 bbox_inches='tight')
 
