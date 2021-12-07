@@ -19,6 +19,8 @@ from sklearn.neighbors import KNeighborsClassifier as KNN
 from sklearn.metrics import accuracy_score, precision_score
 
 def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, device):
+    decoder.eval()
+
     labels = [label for labels in tasks_labels for label in labels]
     for label in labels:
         y = torch.ones(size=[n_gen], dtype=torch.int64) * label
@@ -28,7 +30,6 @@ def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, devi
     new_labels_onehot = utils.data.onehot_encoder(new_labels, n_classes)
 
     z = torch.Tensor(np.random.normal(0, 1, (n_gen * len(labels), latent_dim)))
-    decoder.eval()
 
     with torch.no_grad():
         input = torch.cat([z, new_labels_onehot], dim=1)
@@ -45,9 +46,7 @@ def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, devi
 
 
 def test(encoder, specific, classifier, data_loader, device):
-    encoder.eval()
-    classifier.eval()
-    specific.eval()
+    encoder.eval(); classifier.eval(); specific.eval()
 
     batch_acc = 0
     with torch.no_grad():
@@ -67,8 +66,7 @@ def test(encoder, specific, classifier, data_loader, device):
 
 
 def gen_recon_images(encoder, decoder, data_loader, device):
-    encoder.eval()
-    decoder.eval()
+    encoder.eval(); decoder.eval()
 
     ### Generate reconstructed images ###
     with torch.no_grad():
@@ -99,12 +97,11 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     train_bar = tqdm(range(config['epochs']))
 
     imgs_list = []
-    cvae_loss_epochs = []
-    classifier_loss_epochs = []
-    total_loss_epochs = []
+    cvae_loss_epochs, rec_loss_epochs, kl_loss_epochs = [], [], []
+    classifier_loss_epochs, total_loss_epochs = [], []
     for epoch in train_bar:
-        batch_loss = 0
-        batch_acc = 0
+        epoch_classifier_loss, epoch_rec_loss, epoch_kl_loss = 0, 0, 0
+        epoch_acc = 0
         for batch_idx, (images, labels) in enumerate(train_loader, start=1):
             imgs_list.append(images)
             encoder.train(); decoder.train(); specific.train(); classifier.train()
@@ -137,38 +134,53 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             optimizer_specific.step()
 
             output_list = torch.argmax(classifier_output, dim=1).tolist()
-            batch_acc += accuracy_score(output_list, labels.detach().cpu().numpy())
-            batch_loss += cvae_loss + classifier_loss
+            epoch_acc += accuracy_score(output_list, labels.detach().cpu().numpy())
 
-        cvae_loss_epochs.append(cvae_loss.item())
-        classifier_loss_epochs.append(classifier_loss.item())
-        total_loss_epochs.append(batch_loss.item())
+            epoch_classifier_loss += classifier_loss.item()
+            epoch_rec_loss += rec_loss.item()
+            epoch_kl_loss += kl_loss.item()
+
+        epoch_loss = epoch_classifier_loss + epoch_rec_loss + epoch_kl_loss
+        rec_loss_epochs.append(epoch_rec_loss/len(train_loader))
+        kl_loss_epochs.append(epoch_kl_loss/len(train_loader))
+        cvae_loss_epochs.append((epoch_rec_loss + epoch_kl_loss)/len(train_loader))
+        classifier_loss_epochs.append(epoch_classifier_loss/len(train_loader))
+        total_loss_epochs.append((epoch_loss/len(train_loader)))
         val_acc = test(encoder, specific, classifier, val_loader, device)
         
         train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - '
-                                  f'Loss: {(batch_loss/len(train_loader)):.03f} - '
-                                  f'Accuracy: {(batch_acc/len(train_loader))*100:.03f}% - '
+                                  f'Loss: {(epoch_loss/len(train_loader)):.03f} - '
+                                  f'Accuracy: {(epoch_acc/len(train_loader))*100:.03f}% - '
                                   f'Val Accuracy: {(val_acc)*100:.03f}%')
 
     real_images, recon_images = gen_recon_images(encoder, decoder, val_loader, device)
     gen_images, _ = gen_pseudo_samples(128, tasks_labels, decoder, 10, config['latent_size'], device)
 
-    fig = plt.figure()
-    plt.scatter(list(range(len(cvae_loss_epochs))), cvae_loss_epochs)
-    plt.plot(list(range(len(cvae_loss_epochs))), cvae_loss_epochs, linestyle='dashed', alpha=0.25)
-    ax = fig.gca()
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    for i,j in enumerate(cvae_loss_epochs):
-        ax.annotate(f'{j:.02f}',
-                    xy=(i-config['epochs']*0.01, j+(max(cvae_loss_epochs) - min(cvae_loss_epochs))*0.02),
-                    fontsize=4.5)
-    plt.ylim(top=max(cvae_loss_epochs) + (max(cvae_loss_epochs) - min(cvae_loss_epochs))*0.1)
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title(f'Task {task_id}')
-    plt.savefig(dpi=300,
-                fname=f'{config["exp_path"]}/Plots/task_{task_id}-cvae-loss.png',
-                bbox_inches='tight')
+    utils.plot.plot_losses(classifier_loss_epochs,
+                           xlabel='Epoch',
+                           ylabel='Loss',
+                           title=f'Task {task_id}',
+                           fname=f'{config["plt_path"]}/classifier-loss-t{task_id}.png')
+
+    utils.plot.plot_losses(total_loss_epochs,
+                           xlabel='Epoch',
+                           ylabel='Loss',
+                           title=f'Task {task_id}',
+                           fname=f'{config["plt_path"]}/total-loss-t{task_id}.png')
+
+    utils.plot.plot_losses(cvae_loss_epochs,
+                           xlabel='Epoch',
+                           ylabel='Reconstruction + KL Loss',
+                           title=f'Task {task_id}',
+                           fname=f'{config["plt_path"]}/cvae-loss-t{task_id}.png')
+
+    utils.plot.multi_plots(data1=rec_loss_epochs,
+                           data2=kl_loss_epochs,
+                           xlabel='Epoch',
+                           ylabel1='Reconstruction Loss',
+                           ylabel2='KL Loss',
+                           title=f'Task {task_id}',
+                           fname=f'{config["plt_path"]}/rec-kl-loss-t{task_id}.png')
 
     utils.plot.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
 
@@ -188,6 +200,7 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device):
             latents, _, _ = encoder(images)
             specific_output = specific(images)
             classifier_output = classifier(specific_output, latents.detach())
+
             classifier_out_list.extend(torch.argmax(classifier_output, dim=1).cpu().tolist())
             specific_list.extend(specific_output.cpu().tolist())
             latents_list.extend(latents.cpu().tolist())
@@ -236,6 +249,7 @@ def knn(encoder, specific, classifier, train_loader, device):
             images = images.to(device)
             latents, _, _ = encoder(images)
             specific_output = specific(images)
+
             combined_list.extend(torch.cat([latents, specific_output], dim=1).cpu().numpy())
             labels_list.extend(labels.cpu().tolist())
 
@@ -322,10 +336,6 @@ def main(config):
         acc = test(encoder, specific, classifier, test_loader, device)
         acc_of_task_t_at_time_t.append(acc)
 
-    #save_model(encoder, config['exp_path'], 'encoder')
-    #save_model(decoder, config['exp_path'], 'decoder')
-    #save_model(classifier, config['exp_path'], 'classifier')
-
     ### ------ Testing tasks ask after training all of them ------ ###
 
     ACCs = []
@@ -337,23 +347,11 @@ def main(config):
         ACCs.append(task_acc)
         BWTs.append(task_acc - acc_of_task_t_at_time_t[task])
 
-    plt_path = 'Plots'
-    fig = plt.figure()
-    plt.scatter(list(range(len(ACCs))), ACCs)
-    plt.plot(list(range(len(ACCs))), ACCs, linestyle='dashed', alpha=0.25)
-    ax = fig.gca()
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    for i,j in enumerate(ACCs):
-        ax.annotate(f'{j:.02f}',
-                    xy=(i-len(ACCs)*0.025, j+max(ACCs)*0.025),
-                    fontsize=8)
-    plt.ylim(0.05, 1.05)
-    plt.xlabel('Task')
-    plt.ylabel('Accuracy')
-    plt.title('Test loss')
-    plt.savefig(dpi=300,
-                fname=f'{config["exp_path"]}/{plt_path}/tasks-loss.png',
-                bbox_inches='tight')
+    utils.plot.plot_losses(ACCs,
+                           xlabel='Task',
+                           ylabel='Accuracy',
+                           title='Test Accuracy',
+                           fname=f'{config["plt_path"]}/tasks-acc.png')
 
     with open(config['exp_path']+'/output.log', 'w+') as f:
         for task_id, acc in enumerate(ACCs):
@@ -381,23 +379,27 @@ def load_config(file):
 def get_path(config, idx):
     folder = f'{config["specific_arch"]}S+{config["encoder_arch"]}E+{config["decoder_arch"]}D'
     subfolder = str(idx) if config['exp_name'] == '' else f'{config["exp_name"]}_{idx}'
-    path = '/'.join([config['root'], config['dataset'], str(config['epochs']) + ' epochs', folder, subfolder])
+    exp_path = '/'.join([config['root'],
+                         config['dataset'],
+                         str(config['epochs']) + ' epochs',
+                         folder,
+                         subfolder])
+
+    plt_path = '/'.join([exp_path,
+                        config['plt_path']])
 
     aux_path = ''
-    for folder in path.split('/'):
+    for folder in plt_path.split('/'):
         aux_path = aux_path + folder + '/'
         if not Path(aux_path).is_dir():
             os.mkdir(aux_path)
 
-    plt_path = 'Plots'
-    if not Path(f'{path}/{plt_path}').is_dir():
-        os.mkdir(f'{path}/{plt_path}')
-
-    return path
+    return exp_path
 
 
 if __name__ == '__main__':
     config = load_config('config.yaml')
     for idx in range(config['runs']):
         config['exp_path'] = get_path(config, idx)
+        config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])
         main(config)
