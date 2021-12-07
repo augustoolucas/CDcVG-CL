@@ -1,16 +1,17 @@
 ---
 ### Training parameters ###
 latent_size: 32
-n_replay: 2500 # per class
-batch_size: 512
+n_replay: 5000 # per class
+batch_size: 128
 dataset: 'MNIST'
-epochs: 2
+epochs: 10
 root: 'Results'
 specific_arch: 'MLP'
 encoder_arch: 'IRCL'
 decoder_arch: 'IRCL'
 specific_lr: 2e-4
 autoencoder_lr: 1e-3 
-classifier_lr: 2e-4
+classifier_lr: 1e-4
 runs: 1
-exp_name: 'Runs'
+plt_path: 'Plots'
+exp_name: 'Softmax'
