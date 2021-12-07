@@ -4,6 +4,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from PIL import Image
 from imageio import imwrite
+from matplotlib.ticker import MaxNLocator
 from torchvision.transforms import ToPILImage
 
 def show_image(image):
@@ -18,6 +19,50 @@ def tsne_plot(tsne_results, labels, path, title=''):
                 fname=path,
                 bbox_inches='tight')
     plt.close()
+
+
+def plot_losses(losses, xlabel, ylabel, title, fname, fontsize=4.5):
+    fig = plt.figure()
+    plt.scatter(list(range(len(losses))), losses)
+    plt.plot(list(range(len(losses))), losses, linestyle='dashed', alpha=0.25)
+    ax = fig.gca()
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    for i,j in enumerate(losses):
+        ax.annotate(f'{j:.02f}',
+                    xy=(i-len(losses)*0.01, j+(max(losses) - min(losses))*0.02),
+                    fontsize=fontsize)
+    plt.ylim(top=max(losses) + (max(losses) - min(losses))*0.1)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.savefig(dpi=300,
+                fname=fname,
+                bbox_inches='tight')
+    plt.close()
+
+def multi_plots(data1, data2, xlabel, ylabel1, ylabel2, title, fname):
+    fig, ax1 = plt.subplots()
+    color = 'k'
+    ax1.set_xlabel(xlabel)
+    ax1.set_ylabel(ylabel1, color=color)
+    ax1.scatter(list(range(len(data1))), data1, color=color)
+    ax1.plot(list(range(len(data1))), data1, linestyle='dashed', alpha=0.25, color=color)
+    ax1.tick_params(axis='y', labelcolor=color)
+
+    ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+
+    color = 'tab:blue'
+    ax2.set_ylabel(ylabel2, color=color)  # we already handled the x-label with ax1
+    ax2.scatter(list(range(len(data2))), data2, color=color)
+    ax2.plot(list(range(len(data2))), data2, linestyle='dashed', alpha=0.25, color=color)
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    plt.title(title)
+    plt.savefig(dpi=300,
+                fname=fname,
+                bbox_inches='tight')
+    plt.close()
+
 
 def visualize(real_images, recon_images, gen_images, task_id, path):
     shape = gen_images[0].shape
