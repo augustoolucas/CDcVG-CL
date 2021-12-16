@@ -102,7 +102,10 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     for epoch in train_bar:
         epoch_classifier_loss, epoch_rec_loss, epoch_kl_loss = 0, 0, 0
         epoch_acc = 0
+        classes = {}
         for batch_idx, (images, labels) in enumerate(train_loader, start=1):
+            for cls in set(labels.tolist()):
+                classes[cls] = classes[cls] + len(labels[labels == cls]) if cls in classes else len(labels[labels == cls])
             imgs_list.append(images)
             encoder.train(); decoder.train(); specific.train(); classifier.train()
             ### ------ Training autoencoder ------ ###
@@ -156,6 +159,19 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     real_images, recon_images = gen_recon_images(encoder, decoder, val_loader, device)
     gen_images, _ = gen_pseudo_samples(128, tasks_labels, decoder, 10, config['latent_size'], device)
 
+    fig = plt.figure()
+    plt.bar(list(classes.keys()), list(classes.values()))
+    ax = fig.gca()
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    for idx, key in enumerate(classes):
+        ax.annotate(classes[key],
+                    xy=(idx-len(classes)*0.035, classes[key]+(max(classes.values()) - min(classes.values()))*0.025),
+                    fontsize=10)
+
+    plt.savefig(dpi=300,
+                fname=f'{config["plt_path"]}/classes_distribution-t{task_id}.png')
+    plt.close()
+
     utils.plot.plot_losses(classifier_loss_epochs,
                            xlabel='Epoch',
                            ylabel='Loss',
@@ -185,9 +201,8 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     utils.plot.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
 
 
-def sne(path, encoder, specific, classifier, knn, data_loader, device):
-    encoder.eval()
-    specific.eval()
+def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type):
+    encoder.eval(); classifier.eval(); specific.eval()
 
     with torch.no_grad():
         specific_list = []
@@ -206,7 +221,7 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device):
             latents_list.extend(latents.cpu().tolist())
             labels_list.extend(labels.cpu().tolist())
             combined_list.extend(torch.cat([latents, specific_output], dim=1).cpu().tolist())
-    
+
     mlp_acc = 100*accuracy_score(labels_list, classifier_out_list)
 
     knn_output = knn.predict(combined_list)
@@ -220,24 +235,23 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device):
     tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
     tsne_results = tsne.fit_transform(latents_list)
     title = f'Latent Invariant Representation - Real Labels'
-    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/latents-tsne.png', title)
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/{data_type}-latents-tsne.png', title)
 
     tsne_results = tsne.fit_transform(specific_list)
     title = f'Specific Representation - Real Labels'
-    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/specific-tsne.png', title)
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/{data_type}-specific-tsne.png', title)
 
     tsne_results = tsne.fit_transform(combined_list)
     title = f'Combined Representation - Real Labels'
-    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/combined-tsne.png', title)
-    title = f'Combined Representation - MLP Classifier Output - Accuracy: {mlp_acc:.02f}%'
-    utils.plot.tsne_plot(tsne_results, classifier_out_list, f'{path}/{plt_path}/combined-cls-tsne.png', title)
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/{data_type}-combined-tsne.png', title)
+    title = f'Combined Representation - Classifier Output - Accuracy: {mlp_acc:.02f}%'
+    utils.plot.tsne_plot(tsne_results, classifier_out_list, f'{path}/{plt_path}/{data_type}-combined-cls-tsne.png', title)
     title = f'Combined Representation - KNN Output - Accuracy: {knn_acc:.02f}%'
-    utils.plot.tsne_plot(tsne_results, knn_output, f'{path}/{plt_path}/combined-knn-tsne.png', title)
+    utils.plot.tsne_plot(tsne_results, knn_output, f'{path}/{plt_path}/{data_type}-combined-knn-tsne.png', title)
 
 
-def knn(encoder, specific, classifier, train_loader, device):
+def knn(encoder, specific, train_loader, device):
     encoder.eval()
-    classifier.eval()
     specific.eval()
 
     batch_acc = 0
@@ -263,9 +277,10 @@ def save_model(model, path, name):
 
 
 def main(config):
+    ## ------ Reproducibility ------ ##
     torch.manual_seed(1)
     torch.cuda.manual_seed(1)
-    os.environ['PYTHONHASHSEED']=str(1)
+    os.environ['PYTHONHASHSEED'] = str(1)
     random.seed(1)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
@@ -309,7 +324,7 @@ def main(config):
     ### ------ Train the sequence of tasks ------ ###
     for task in range(n_tasks):
         print(f'Training Task {task}')
-        train_set = train_tasks[task]
+        train_set = copy.copy(train_tasks[task])
 
         if task > 0:
             gen_images, gen_labels = gen_pseudo_samples(config['n_replay'],
@@ -364,8 +379,9 @@ def main(config):
 
     train_loader = utils.data.get_dataloader(train_tasks, config['batch_size'])
     test_loader = utils.data.get_dataloader(test_tasks, batch_size=1000)
-    knn_ = knn(encoder, specific, classifier, train_loader, device)
-    sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, device)
+    knn_ = knn(encoder, specific, train_loader, device)
+    sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, device, 'test')
+    sne(config['exp_path'], encoder, specific, classifier, knn_, train_loader, device, 'train')
 
 
 def load_config(file):
