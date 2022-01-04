@@ -16,7 +16,7 @@ patch_sklearn()
 from sklearn.manifold import TSNE
 from matplotlib.ticker import MaxNLocator
 from sklearn.neighbors import KNeighborsClassifier as KNN
-from sklearn.metrics import accuracy_score, precision_score
+from sklearn.metrics import accuracy_score, precision_score, confusion_matrix, ConfusionMatrixDisplay
 
 def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, device):
     decoder.eval()
@@ -45,11 +45,13 @@ def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, devi
     return new_images, new_labels
 
 
-def test(encoder, specific, classifier, data_loader, device):
+def test(encoder, specific, classifier, data_loader, device, fname=None):
     encoder.eval(); classifier.eval(); specific.eval()
 
     batch_acc = 0
     with torch.no_grad():
+        all_outputs = []
+        all_labels = []
         for images, labels in data_loader:
             images = images.to(device)
             latents, _, _ = encoder(images)
@@ -57,10 +59,22 @@ def test(encoder, specific, classifier, data_loader, device):
             specific_output = specific(images)
             classifier_output = classifier(specific_output, latents.detach())
 
-            output_list = torch.argmax(classifier_output, dim=1).tolist()
-            batch_acc += accuracy_score(output_list, labels.numpy())
+            classifier_output = torch.argmax(classifier_output, dim=1).tolist()
+            batch_acc += accuracy_score(classifier_output, labels.tolist())
+
+            if fname is not None:
+                all_outputs.extend(classifier_output)
+                all_labels.extend(labels.tolist())
 
         batch_acc /= len(data_loader)
+
+    if fname is not None:
+        cm = confusion_matrix(all_labels, all_outputs, labels=list(set(all_labels)))
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm,
+                                      display_labels=list(set(all_labels)))
+        disp.plot(colorbar=False)
+        plt.savefig(dpi=300, fname=fname, bbox_inches='tight')
+        plt.close()
 
     return batch_acc 
 
@@ -94,9 +108,14 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     classification_loss = torch.nn.CrossEntropyLoss()
     kl_divergence_loss = lambda var, mu: 0.5 * torch.sum(torch.exp(var) + mu**2 - 1 - var)
 
+    ### ------ Training ------ ###
+
+    task_plt_path = f'{config["plt_path"]}/Task_{task_id}'
+    if not Path(task_plt_path).is_dir():
+        os.mkdir(task_plt_path)
+
     train_bar = tqdm(range(config['epochs']))
 
-    imgs_list = []
     cvae_loss_epochs, rec_loss_epochs, kl_loss_epochs = [], [], []
     classifier_loss_epochs, total_loss_epochs = [], []
     for epoch in train_bar:
@@ -106,7 +125,6 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
         for batch_idx, (images, labels) in enumerate(train_loader, start=1):
             for cls in set(labels.tolist()):
                 classes[cls] = classes[cls] + len(labels[labels == cls]) if cls in classes else len(labels[labels == cls])
-            imgs_list.append(images)
             encoder.train(); decoder.train(); specific.train(); classifier.train()
             ### ------ Training autoencoder ------ ###
             encoder.zero_grad(); decoder.zero_grad()
@@ -149,7 +167,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
         cvae_loss_epochs.append((epoch_rec_loss + epoch_kl_loss)/len(train_loader))
         classifier_loss_epochs.append(epoch_classifier_loss/len(train_loader))
         total_loss_epochs.append((epoch_loss/len(train_loader)))
-        val_acc = test(encoder, specific, classifier, val_loader, device)
+        val_acc = test(encoder, specific, classifier, val_loader, device, f'{task_plt_path}/epoch_{epoch}')
         
         train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - '
                                   f'Loss: {(epoch_loss/len(train_loader)):.03f} - '
@@ -168,27 +186,29 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
                     xy=(idx-len(classes)*0.035, classes[key]+(max(classes.values()) - min(classes.values()))*0.025),
                     fontsize=10)
 
+    plt.title(f'Task {task_id}')
     plt.savefig(dpi=300,
-                fname=f'{config["plt_path"]}/classes_distribution-t{task_id}.png')
+                fname=f'{task_plt_path}/classes_distribution.png',
+                bbox_inches='tight')
     plt.close()
 
     utils.plot.plot_losses(classifier_loss_epochs,
                            xlabel='Epoch',
                            ylabel='Loss',
                            title=f'Task {task_id}',
-                           fname=f'{config["plt_path"]}/classifier-loss-t{task_id}.png')
+                           fname=f'{task_plt_path}/loss-classifier.png')
 
     utils.plot.plot_losses(total_loss_epochs,
                            xlabel='Epoch',
                            ylabel='Loss',
                            title=f'Task {task_id}',
-                           fname=f'{config["plt_path"]}/total-loss-t{task_id}.png')
+                           fname=f'{task_plt_path}/loss-total.png')
 
     utils.plot.plot_losses(cvae_loss_epochs,
                            xlabel='Epoch',
                            ylabel='Reconstruction + KL Loss',
                            title=f'Task {task_id}',
-                           fname=f'{config["plt_path"]}/cvae-loss-t{task_id}.png')
+                           fname=f'{task_plt_path}/loss-cvae.png')
 
     utils.plot.multi_plots(data1=rec_loss_epochs,
                            data2=kl_loss_epochs,
@@ -196,9 +216,9 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
                            ylabel1='Reconstruction Loss',
                            ylabel2='KL Loss',
                            title=f'Task {task_id}',
-                           fname=f'{config["plt_path"]}/rec-kl-loss-t{task_id}.png')
+                           fname=f'{task_plt_path}/loss-rec-kl.png')
 
-    utils.plot.visualize(real_images, recon_images, gen_images, task_id, config['exp_path'])
+    utils.plot.visualize(real_images, recon_images, gen_images, task_id, task_plt_path)
 
 
 def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type):
@@ -230,24 +250,22 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type
         print(f'KNN Accuracy: {knn_acc:.02f}%', file=f)
     print(f'KNN Accuracy: {knn_acc:.02f}%')
 
-    plt_path = 'Plots'
-
     tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
     tsne_results = tsne.fit_transform(latents_list)
     title = f'Latent Invariant Representation - Real Labels'
-    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/{data_type}-latents-tsne.png', title)
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{config["plt_path"]}/{data_type}-latents-tsne.png', title)
 
     tsne_results = tsne.fit_transform(specific_list)
     title = f'Specific Representation - Real Labels'
-    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/{data_type}-specific-tsne.png', title)
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{config["plt_path"]}/{data_type}-specific-tsne.png', title)
 
     tsne_results = tsne.fit_transform(combined_list)
     title = f'Combined Representation - Real Labels'
-    utils.plot.tsne_plot(tsne_results, labels_list, f'{path}/{plt_path}/{data_type}-combined-tsne.png', title)
+    utils.plot.tsne_plot(tsne_results, labels_list, f'{config["plt_path"]}/{data_type}-combined-tsne.png', title)
     title = f'Combined Representation - Classifier Output - Accuracy: {mlp_acc:.02f}%'
-    utils.plot.tsne_plot(tsne_results, classifier_out_list, f'{path}/{plt_path}/{data_type}-combined-cls-tsne.png', title)
+    utils.plot.tsne_plot(tsne_results, classifier_out_list, f'{config["plt_path"]}/{data_type}-combined-cls-tsne.png', title)
     title = f'Combined Representation - KNN Output - Accuracy: {knn_acc:.02f}%'
-    utils.plot.tsne_plot(tsne_results, knn_output, f'{path}/{plt_path}/{data_type}-combined-knn-tsne.png', title)
+    utils.plot.tsne_plot(tsne_results, knn_output, f'{config["plt_path"]}/{data_type}-combined-knn-tsne.png', title)
 
 
 def knn(encoder, specific, train_loader, device):
@@ -392,9 +410,10 @@ def load_config(file):
     return config
 
 
-def get_path(config, idx):
+def get_path(config, idx=-1):
     folder = f'{config["specific_arch"]}S+{config["encoder_arch"]}E+{config["decoder_arch"]}D'
-    subfolder = str(idx) if config['exp_name'] == '' else f'{config["exp_name"]}_{idx}'
+    subfolder = str(idx) if config['exp_name'] == '' else config["exp_name"]
+    subfolder = subfolder if idx == -1 else f'{subfolder}-{idx}'
     exp_path = '/'.join([config['root'],
                          config['dataset'],
                          str(config['epochs']) + ' epochs',
@@ -416,6 +435,8 @@ def get_path(config, idx):
 if __name__ == '__main__':
     config = load_config('config.yaml')
     for idx in range(config['runs']):
+        idx = idx if config['runs'] > 1 else -1
         config['exp_path'] = get_path(config, idx)
+        os.system('cp ./config.yaml ' + '"./' + f'{config["exp_path"]}' + '"')
         config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])
         main(config)
