@@ -81,7 +81,10 @@ def create_task(dataset):
     datasets = []
 
     for labels in task_labels:
-        idxs = np.in1d(dataset.targets, labels)
+        idxs = []
+        for label in labels:
+            all_idxs = np.nonzero(np.isin(dataset.targets, [label]))[0]
+            idxs.extend(all_idxs[:5000])
         task_set = copy.deepcopy(dataset)
         if type(dataset.targets) is list:
             task_set.targets = np.array(dataset.targets)[idxs].tolist()
