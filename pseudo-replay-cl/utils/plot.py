@@ -92,7 +92,7 @@ def visualize(real_images, recon_images, gen_images, task_id, path):
         ax.spines.left.set_visible(False)
 
     plt.savefig(dpi=500,
-                fname='%s/imgs_task_%d.jpg' % (path, task_id),
+                fname=f'{path}/images.png',
                 bbox_inches='tight')
     plt.close()
 
