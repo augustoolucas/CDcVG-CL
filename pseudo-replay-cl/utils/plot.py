@@ -21,13 +21,20 @@ def tsne_plot(tsne_results, labels, path, title=''):
     plt.close()
 
 
+def enumerate_step(xs, start=0, step=1):
+    for x in range(start, len(xs), step):
+        yield (x, xs[x])
+
+
 def plot_losses(losses, xlabel, ylabel, title, fname, fontsize=4.5):
     fig = plt.figure()
     plt.scatter(list(range(len(losses))), losses)
     plt.plot(list(range(len(losses))), losses, linestyle='dashed', alpha=0.25)
     ax = fig.gca()
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    for i,j in enumerate(losses):
+    
+    step = int(len(losses)/10) if int(len(losses)/10) > 0 else 1
+    for i, j in enumerate_step(losses, step=step):
         ax.annotate(f'{j:.02f}',
                     xy=(i-len(losses)*0.01, j+(max(losses) - min(losses))*0.02),
                     fontsize=fontsize)
