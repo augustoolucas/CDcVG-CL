@@ -11,6 +11,10 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
 
         channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
+        height = img_shape[0] if img_shape[0] > img_shape[2] else img_shape[1]
+
+        assert channels in [1, 3]
+        assert height in [28, 32]
 
         self.conv_block = nn.Sequential(
             nn.Conv2d(channels, 32, kernel_size=3, padding=1, stride=1),
@@ -32,8 +36,9 @@ class Encoder(nn.Module):
         )
         """
 
-        self.mu = nn.Linear(128*8*8, latent_dim)
-        self.logvar = nn.Linear(128*8*8, latent_dim)
+        feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
+        self.mu = nn.Linear(np.prod(feat_map_dim), latent_dim)
+        self.logvar = nn.Linear(np.prod(feat_map_dim), latent_dim)
         self.latent_dim = latent_dim
 
     def reparameterization(self, mu, logvar,latent_dim):
@@ -57,17 +62,19 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
 
         channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
+        height = img_shape[0] if img_shape[0] > img_shape[2] else img_shape[1]
+
+        assert channels in [1, 3]
+        assert height in [28, 32]
+
+        self.feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
 
         # conditional generation
         input_dim = latent_dim + n_classes if use_label else latent_dim
 
         self.linear_block = nn.Sequential(
-            #nn.Linear(input_dim, n_hidden),
-            #nn.BatchNorm1d(n_hidden),
-            #nn.ELU(inplace=True),
-            #nn.Linear(n_hidden, 128*14*14),
-            nn.Linear(input_dim, 128*8*8),
-            nn.BatchNorm1d(128*8*8),
+            nn.Linear(input_dim, np.prod(self.feat_map_dim)),
+            nn.BatchNorm1d(np.prod(self.feat_map_dim)),
             nn.ELU(inplace=True),
         )
 
@@ -85,7 +92,7 @@ class Decoder(nn.Module):
 
     def forward(self, z):
         x = self.linear_block(z)
-        x = self.conv_block(x.view(-1, 128, 8, 8))
+        x = self.conv_block(x.view(-1, 128, self.feat_map_dim[1], self.feat_map_dim[2]))
         return x
 
 
@@ -108,7 +115,7 @@ class Specific(nn.Module):
         )
         
         self.linear_block = nn.Sequential(
-            nn.Linear(128*8*8, latent_dim),
+            nn.Linear(128*7*7, latent_dim),
             nn.ReLU(inplace=True)
         )
 
