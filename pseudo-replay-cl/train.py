@@ -2,6 +2,7 @@ import os
 import yaml
 import copy
 import torch
+import mlflow
 import models
 import random
 import utils.data
@@ -97,17 +98,23 @@ def gen_recon_images(encoder, decoder, data_loader, device):
 def train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, tasks_labels, task_id, device):
     ### ------ Optimizers ------ ###
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
-                                      lr=float(config['autoencoder_lr']))
+                                      lr=float(config['lr_autoencoder']))
     optimizer_specific = torch.optim.Adam(specific.parameters(),
-                                          lr=float(config['specific_lr']))
+                                          lr=float(config['lr_specific']))
     optimizer_classifier = torch.optim.Adam(classifier.parameters(),
-                                            lr=float(config['classifier_lr']))
+                                            lr=float(config['lr_classifier']))
+
+    mlflow.log_params({'optimizer_cvae': 'Adam',
+                       'optimizer_specific': 'Adam',
+                       'optimizer_classifier': 'Adam'})
 
     ### ------ Losses ------ ###
     pixelwise_loss = torch.nn.MSELoss(reduction='sum')
     classification_loss = torch.nn.CrossEntropyLoss()
     kl_divergence_loss = lambda var, mu: 0.5 * torch.sum(torch.exp(var) + mu**2 - 1 - var)
 
+    mlflow.log_params({'pixelwise_loss': 'MSE',
+                       'classification_loss': 'CrossEntropyLoss'})
     ### ------ Training ------ ###
 
     task_plt_path = f'{config["plt_path"]}/Task_{task_id}'
@@ -162,6 +169,12 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             epoch_kl_loss += kl_loss.item()
 
         epoch_loss = epoch_classifier_loss + epoch_rec_loss + epoch_kl_loss
+        mlflow.log_metrics({f'rec_loss_task_{task_id}': epoch_rec_loss/len(train_loader),
+                            f'kl_loss_task_{task_id}': epoch_kl_loss/len(train_loader),
+                            f'cvae_loss_task_{task_id}': (epoch_rec_loss + epoch_kl_loss)/len(train_loader),
+                            f'classifier_loss_task_{task_id}': epoch_classifier_loss/len(train_loader),
+                            f'total_loss_task_{task_id}': epoch_loss/len(train_loader)},
+                          step=epoch)
         rec_loss_epochs.append(epoch_rec_loss/len(train_loader))
         kl_loss_epochs.append(epoch_kl_loss/len(train_loader))
         cvae_loss_epochs.append((epoch_rec_loss + epoch_kl_loss)/len(train_loader))
@@ -218,7 +231,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
                            title=f'Task {task_id}',
                            fname=f'{task_plt_path}/loss-rec-kl.png')
 
-    utils.plot.visualize(real_images, recon_images, gen_images, task_id, task_plt_path)
+    utils.plot.visualize(real_images, recon_images, gen_images, f'{task_plt_path}/images.png')
 
 
 def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type):
@@ -247,8 +260,9 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type
     knn_output = knn.predict(combined_list)
     knn_acc = 100*accuracy_score(labels_list, knn_output)
     with open(f'{path}/output.log', 'a') as f:
-        print(f'KNN Accuracy: {knn_acc:.02f}%', file=f)
-    print(f'KNN Accuracy: {knn_acc:.02f}%')
+        print(f'{data_type.capitalize()} KNN Accuracy: {knn_acc:.02f}%', file=f)
+    print(f'{data_type.capitalize()} KNN Accuracy: {knn_acc:.02f}%')
+    mlflow.log_metric(f'{data_type.capitalize()} KNN Accuracy', knn_acc)
 
     tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
     tsne_results = tsne.fit_transform(latents_list)
@@ -262,7 +276,7 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type
     tsne_results = tsne.fit_transform(combined_list)
     title = f'Combined Representation - Real Labels'
     utils.plot.tsne_plot(tsne_results, labels_list, f'{config["plt_path"]}/{data_type}-combined-tsne.png', title)
-    title = f'Combined Representation - Classifier Output - Accuracy: {mlp_acc:.02f}%'
+    title = f'Combined Representation - MLP Classifier Output - Accuracy: {mlp_acc:.02f}%'
     utils.plot.tsne_plot(tsne_results, classifier_out_list, f'{config["plt_path"]}/{data_type}-combined-cls-tsne.png', title)
     title = f'Combined Representation - KNN Output - Accuracy: {knn_acc:.02f}%'
     utils.plot.tsne_plot(tsne_results, knn_output, f'{config["plt_path"]}/{data_type}-combined-knn-tsne.png', title)
@@ -305,6 +319,7 @@ def main(config):
     np.random.seed(1)
     ## ------ Load Data ------ ###
     train_tasks, val_tasks, test_tasks = utils.data.load_tasks(config['dataset'],
+                                                               config['balanced'],
                                                                val=False)
     data_shape = utils.data.get_task_data_shape(train_tasks)
     classes = utils.data.get_tasks_classes(train_tasks)
@@ -335,7 +350,7 @@ def main(config):
     elif config['decoder_arch'] == 'Conv':
         decoder = models.conv.Decoder(data_shape, config['latent_size'], n_classes).to(device)
 
-    classifier = models.mlp.Classifier(config['latent_size'], 20, 40, n_classes).to(device)
+    classifier = models.mlp.Classifier(config['latent_size'], 20, 40, n_classes, softmax=config['softmax']).to(device)
 
     acc_of_task_t_at_time_t = []
 
@@ -367,6 +382,7 @@ def main(config):
 
         train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, tasks_labels[:task+1], task, device)
         acc = test(encoder, specific, classifier, test_loader, device)
+        mlflow.log_metric(f'training_acc_task', acc, step=task)
         acc_of_task_t_at_time_t.append(acc)
 
     ### ------ Testing tasks ask after training all of them ------ ###
@@ -377,8 +393,12 @@ def main(config):
         test_set = test_tasks[task]
         test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
         task_acc = test(encoder, specific, classifier, test_loader, device)
+        bwt = task_acc - acc_of_task_t_at_time_t[task]
+        mlflow.log_metrics({f'acc_task': task_acc,
+                            f'bwt_task': bwt},
+                           step=task)
         ACCs.append(task_acc)
-        BWTs.append(task_acc - acc_of_task_t_at_time_t[task])
+        BWTs.append(bwt)
 
     utils.plot.plot_losses(ACCs,
                            xlabel='Task',
@@ -386,14 +406,20 @@ def main(config):
                            title='Test Accuracy',
                            fname=f'{config["plt_path"]}/tasks-acc.png')
 
+    avg_acc = sum(ACCs)/n_tasks
+    avg_bwt = sum(BWTs)/(n_tasks-1)
     with open(config['exp_path']+'/output.log', 'w+') as f:
         for task_id, acc in enumerate(ACCs):
             print(f'Task {task_id} - Accuracy: {(acc)*100:.02f}%', file=f)
 
-        print(f'Average accuracy: {(sum(ACCs)/n_tasks)*100:.02f}%', file=f)
-        print(f'Average backward transfer: {(sum(BWTs)/(n_tasks-1))*100:.02f}%', file=f)
-    print(f'Average accuracy: {(sum(ACCs)/n_tasks)*100:.02f}%')
-    print(f'Average backward transfer: {(sum(BWTs)/(n_tasks-1))*100:.02f}%')
+        print(f'Average accuracy: {avg_acc*100:.02f}%', file=f)
+        print(f'Average backward transfer: {avg_bwt*100:.02f}%', file=f)
+    print(f'Average accuracy: {avg_acc*100:.02f}%')
+    print(f'Average backward transfer: {avg_bwt*100:.02f}%')
+
+
+    mlflow.log_metrics({'Average accuracy': avg_acc,
+                        'Average BWT': avg_bwt})
 
     train_loader = utils.data.get_dataloader(train_tasks, config['batch_size'])
     test_loader = utils.data.get_dataloader(test_tasks, batch_size=1000)
@@ -412,7 +438,7 @@ def load_config(file):
 
 def get_path(config, idx=-1):
     folder = f'{config["specific_arch"]}S+{config["encoder_arch"]}E+{config["decoder_arch"]}D'
-    subfolder = str(idx) if config['exp_name'] == '' else config["exp_name"]
+    subfolder = mlflow.active_run().info.run_id if config['exp_name'] == '' else config['exp_name']
     subfolder = subfolder if idx == -1 else f'{subfolder}-{idx}'
     exp_path = '/'.join([config['root'],
                          config['dataset'],
@@ -420,8 +446,7 @@ def get_path(config, idx=-1):
                          folder,
                          subfolder])
 
-    plt_path = '/'.join([exp_path,
-                        config['plt_path']])
+    plt_path = '/'.join([exp_path, config['plt_path']])
 
     aux_path = ''
     for folder in plt_path.split('/'):
@@ -432,11 +457,23 @@ def get_path(config, idx=-1):
     return exp_path
 
 
+def log_config(config):
+    for k, v in config.items():
+        if k in ['root', 'runs', 'exp_name', 'plt_path']:
+            continue
+        mlflow.log_param(k, v)
+
 if __name__ == '__main__':
-    config = load_config('config.yaml')
+    config = load_config('./config.yaml')
+    assert config['runs'] > 0
     for idx in range(config['runs']):
-        idx = idx if config['runs'] > 1 else -1
-        config['exp_path'] = get_path(config, idx)
-        os.system('cp ./config.yaml ' + '"./' + f'{config["exp_path"]}' + '"')
-        config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])
-        main(config)
+        with mlflow.start_run(experiment_id=3):
+            idx = idx if config['runs'] > 1 else -1
+            config['exp_path'] = get_path(config, idx)
+            os.system('cp ./config.yaml ' + '"./' + f'{config["exp_path"]}' + '"')
+            config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])
+
+            print(f'MLflow Run ID: {mlflow.active_run().info.run_id}')
+            log_config(config)
+            main(config)
+            mlflow.log_artifacts(config['exp_path'])

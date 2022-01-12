@@ -23,7 +23,7 @@ class Specific(nn.Module):
 
      
 class Classifier(nn.Module):
-    def __init__(self, invariant_n_hidden, specific_n_hidden, classification_n_hidden, n_classes):
+    def __init__(self, invariant_n_hidden, specific_n_hidden, classification_n_hidden, n_classes, softmax=False):
         super(Classifier, self).__init__()
 
         # classification module
@@ -32,10 +32,12 @@ class Classifier(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-        self.output = nn.Sequential(
-            nn.Linear(classification_n_hidden, n_classes),
-            #nn.Softmax(dim=1)
-        )
+        modules = [nn.Linear(classification_n_hidden, n_classes)]
+
+        if softmax:
+            modules.append(nn.Softmax(dim=1))
+
+        self.output = nn.Sequential(*modules)
 
     def forward(self, discriminative, invariant):
         x = self.classifier_layer(torch.cat([discriminative, invariant], dim=1))

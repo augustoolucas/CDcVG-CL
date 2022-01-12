@@ -62,16 +62,16 @@ def load_data(dataset, val=False):
 
     return train_set, val_set, test_set
 
-def load_tasks(dataset, val=False):
+def load_tasks(dataset, balanced=False, val=False):
     train_set, val_set, test_set = load_data(dataset, val)
-    train_tasks = create_task(train_set)
-    val_tasks = create_task(val_set) if val else None
-    test_tasks = create_task(test_set)
+    train_tasks = create_task(train_set, balanced)
+    val_tasks = create_task(val_set, balanced) if val else None
+    test_tasks = create_task(test_set, balanced)
 
     return train_tasks, val_tasks, test_tasks
 
 
-def create_task(dataset):
+def create_task(dataset, balanced=False):
     if type(dataset.targets) is list:
         n_classes = len(set(dataset.targets))
     else:
@@ -84,7 +84,7 @@ def create_task(dataset):
         idxs = []
         for label in labels:
             all_idxs = np.nonzero(np.isin(dataset.targets, [label]))[0]
-            all_idxs = all_idxs[:5000]
+            all_idxs = all_idxs[:5000] if balanced else all_idxs
             idxs.extend(all_idxs)
         task_set = copy.deepcopy(dataset)
         if type(dataset.targets) is list:

@@ -71,7 +71,7 @@ def multi_plots(data1, data2, xlabel, ylabel1, ylabel2, title, fname):
     plt.close()
 
 
-def visualize(real_images, recon_images, gen_images, task_id, path):
+def visualize(real_images, recon_images, gen_images, fname):
     shape = gen_images[0].shape
     shape = shape if shape[0] > shape[2] else (shape[1], shape[2], shape[0])
     cmap = 'gray' if shape[2] == 1 else None
@@ -99,7 +99,7 @@ def visualize(real_images, recon_images, gen_images, task_id, path):
         ax.spines.left.set_visible(False)
 
     plt.savefig(dpi=500,
-                fname=f'{path}/images.png',
+                fname=fname,
                 bbox_inches='tight')
     plt.close()
 
