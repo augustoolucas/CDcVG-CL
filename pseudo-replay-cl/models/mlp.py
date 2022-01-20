@@ -7,13 +7,13 @@ cuda = True if torch.cuda.is_available() else False
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
 class Specific(nn.Module):
-    def __init__(self, img_shape, specific_n_hidden):
+    def __init__(self, img_shape, specific_size):
         super(Specific, self).__init__()
 
         channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
         # specific module
         self.specific = nn.Sequential(
-            nn.Linear(int(np.prod(img_shape)), specific_n_hidden),
+            nn.Linear(int(np.prod(img_shape)), specific_size),
             nn.ReLU(inplace=True),
         )
 
@@ -23,12 +23,12 @@ class Specific(nn.Module):
 
      
 class Classifier(nn.Module):
-    def __init__(self, invariant_n_hidden, specific_n_hidden, classification_n_hidden, n_classes, softmax=False):
+    def __init__(self, invariant_size, specific_size, classification_n_hidden, n_classes, softmax=False):
         super(Classifier, self).__init__()
 
         # classification module
         self.classifier_layer = nn.Sequential(
-            nn.Linear(specific_n_hidden + invariant_n_hidden, classification_n_hidden),
+            nn.Linear(specific_size + invariant_size, classification_n_hidden),
             nn.ReLU(inplace=True),
         )
 

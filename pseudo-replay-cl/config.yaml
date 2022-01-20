@@ -2,14 +2,14 @@
 ### Training parameters ###
 latent_size: 32
 n_replay: 5000 # per class
-epochs: 10
+epochs: 2
 batch_size: 128
 dataset: 'MNIST'
 balanced: false
-softmax: true
-specific_arch: 'Conv'
-encoder_arch: 'Conv'
-decoder_arch: 'Conv'
+softmax: false
+arch_specific: 'Conv'
+arch_encoder: 'Conv'
+arch_decoder: 'Conv'
 lr_specific: 2e-4
 lr_classifier: 2e-4
 lr_autoencoder: 1e-3 

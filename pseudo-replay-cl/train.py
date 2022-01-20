@@ -49,21 +49,20 @@ def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, devi
 def test(encoder, specific, classifier, data_loader, device, fname=None):
     encoder.eval(); classifier.eval(); specific.eval()
 
-    batch_acc = 0
     with torch.no_grad():
+        batch_acc = 0
         all_outputs = []
         all_labels = []
         for images, labels in data_loader:
             images = images.to(device)
             latents, _, _ = encoder(images)
-
             specific_output = specific(images)
             classifier_output = classifier(specific_output, latents.detach())
 
             classifier_output = torch.argmax(classifier_output, dim=1).tolist()
             batch_acc += accuracy_score(classifier_output, labels.tolist())
 
-            if fname is not None:
+            if fname:
                 all_outputs.extend(classifier_output)
                 all_labels.extend(labels.tolist())
 
@@ -73,7 +72,9 @@ def test(encoder, specific, classifier, data_loader, device, fname=None):
         cm = confusion_matrix(all_labels, all_outputs, labels=list(set(all_labels)))
         disp = ConfusionMatrixDisplay(confusion_matrix=cm,
                                       display_labels=list(set(all_labels)))
+
         disp.plot(colorbar=False)
+        disp.ax_.set_title(f'Accuracy: {(batch_acc*100):.02f}%')
         plt.savefig(dpi=300, fname=fname, bbox_inches='tight')
         plt.close()
 
@@ -108,18 +109,20 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
                        'optimizer_specific': 'Adam',
                        'optimizer_classifier': 'Adam'})
 
-    ### ------ Losses ------ ###
+    ### ------ Loss Functions ------ ###
     pixelwise_loss = torch.nn.MSELoss(reduction='sum')
     classification_loss = torch.nn.CrossEntropyLoss()
     kl_divergence_loss = lambda var, mu: 0.5 * torch.sum(torch.exp(var) + mu**2 - 1 - var)
 
-    mlflow.log_params({'pixelwise_loss': 'MSE',
-                       'classification_loss': 'CrossEntropyLoss'})
+    mlflow.log_params({'loss_fn_pixelwise': 'MSE',
+                       'loss_fn_classification': 'CrossEntropyLoss'})
     ### ------ Training ------ ###
 
     task_plt_path = f'{config["plt_path"]}/Task_{task_id}'
     if not Path(task_plt_path).is_dir():
         os.mkdir(task_plt_path)
+
+    utils.plot.visualize_train_data(train_loader, [label for task in tasks_labels for label in task], f'{task_plt_path}/train_imgs.png')
 
     train_bar = tqdm(range(config['epochs']))
 
@@ -142,8 +145,8 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             latents, mu, var = encoder(images)
             recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
 
-            kl_loss = kl_divergence_loss(var, mu)/config['batch_size']
-            rec_loss = pixelwise_loss(recon_images, images)/config['batch_size']
+            kl_loss = kl_divergence_loss(var, mu)/len(images)
+            rec_loss = pixelwise_loss(recon_images, images)/len(images)
             cvae_loss = rec_loss + kl_loss
 
             cvae_loss.backward()
@@ -156,7 +159,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
 
             specific_output = specific(images)
             classifier_output = classifier(specific_output, latents.detach())
-            classifier_loss = classification_loss(classifier_output, labels)
+            classifier_loss = classification_loss(classifier_output, labels)/len(images)
             classifier_loss.backward()
             optimizer_classifier.step()
             optimizer_specific.step()
@@ -169,18 +172,18 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             epoch_kl_loss += kl_loss.item()
 
         epoch_loss = epoch_classifier_loss + epoch_rec_loss + epoch_kl_loss
-        mlflow.log_metrics({f'rec_loss_task_{task_id}': epoch_rec_loss/len(train_loader),
-                            f'kl_loss_task_{task_id}': epoch_kl_loss/len(train_loader),
-                            f'cvae_loss_task_{task_id}': (epoch_rec_loss + epoch_kl_loss)/len(train_loader),
-                            f'classifier_loss_task_{task_id}': epoch_classifier_loss/len(train_loader),
-                            f'total_loss_task_{task_id}': epoch_loss/len(train_loader)},
+        mlflow.log_metrics({f'loss_rec_task_{task_id}': epoch_rec_loss/len(train_loader),
+                            f'loss_kl_task_{task_id}': epoch_kl_loss/len(train_loader),
+                            f'loss_cvae_task_{task_id}': (epoch_rec_loss + epoch_kl_loss)/len(train_loader),
+                            f'loss_classifier_task_{task_id}': epoch_classifier_loss/len(train_loader),
+                            f'loss_total_task_{task_id}': epoch_loss/len(train_loader)},
                           step=epoch)
         rec_loss_epochs.append(epoch_rec_loss/len(train_loader))
         kl_loss_epochs.append(epoch_kl_loss/len(train_loader))
         cvae_loss_epochs.append((epoch_rec_loss + epoch_kl_loss)/len(train_loader))
         classifier_loss_epochs.append(epoch_classifier_loss/len(train_loader))
         total_loss_epochs.append((epoch_loss/len(train_loader)))
-        val_acc = test(encoder, specific, classifier, val_loader, device, f'{task_plt_path}/epoch_{epoch}')
+        val_acc = test(encoder, specific, classifier, val_loader, device, f'{task_plt_path}/epoch_{epoch}.png')
         
         train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - '
                                   f'Loss: {(epoch_loss/len(train_loader)):.03f} - '
@@ -283,10 +286,8 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type
 
 
 def knn(encoder, specific, train_loader, device):
-    encoder.eval()
-    specific.eval()
+    encoder.eval(); specific.eval()
 
-    batch_acc = 0
     knn = KNN(n_neighbors=3, n_jobs=-1)
     with torch.no_grad():
         combined_list = []
@@ -317,13 +318,14 @@ def main(config):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     np.random.seed(1)
+
     ## ------ Load Data ------ ###
-    train_tasks, val_tasks, test_tasks = utils.data.load_tasks(config['dataset'],
-                                                               config['balanced'],
-                                                               val=False)
-    data_shape = utils.data.get_task_data_shape(train_tasks)
-    classes = utils.data.get_tasks_classes(train_tasks)
-    tasks_labels = utils.data.get_tasks_labels(train_tasks)
+    train_tasks = utils.data.load_tasks(config['dataset'], config['balanced'], True)
+    test_tasks = utils.data.load_tasks(config['dataset'], config['balanced'], False)
+
+    img_shape = utils.data.get_img_shape(train_tasks)
+    classes = utils.data.get_classes(train_tasks)
+    labels = utils.data.get_labels(train_tasks)
     n_tasks = len(train_tasks)
     n_classes = len(classes)
 
@@ -331,126 +333,131 @@ def main(config):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Device: {device}')
 
-    ### ------ Loading IRCL Models ------ ###
-    assert config['specific_arch'] in ['MLP', 'Conv']
-    assert config['encoder_arch'] in ['IRCL', 'Conv']
-    assert config['decoder_arch'] in ['IRCL', 'Conv']
-    if config['specific_arch'] == 'MLP':
-        specific = models.mlp.Specific(data_shape, 20).to(device)
-    elif config['specific_arch'] == 'Conv':
-        specific = models.conv.Specific(data_shape, 20).to(device)
-
-    if config['encoder_arch'] == 'IRCL':
-        encoder = models.ircl.Encoder(data_shape, 300, config['latent_size']).to(device)
-    elif config['encoder_arch'] == 'Conv':
-        encoder = models.conv.Encoder(data_shape, config['latent_size']).to(device)
-
-    if config['decoder_arch'] == 'IRCL':
-        decoder = models.ircl.Decoder(data_shape, 300, config['latent_size'], n_classes).to(device)
-    elif config['decoder_arch'] == 'Conv':
-        decoder = models.conv.Decoder(data_shape, config['latent_size'], n_classes).to(device)
-
-    classifier = models.mlp.Classifier(config['latent_size'], 20, 40, n_classes, softmax=config['softmax']).to(device)
-
-    acc_of_task_t_at_time_t = []
+    ### ------ Loading Models ------ ###
+    specific = models.utils.load_specific_module(img_shape, config)
+    encoder = models.utils.load_encoder(img_shape, config)
+    decoder = models.utils.load_decoder(img_shape, n_classes, config)
+    classifier = models.utils.load_classifier(n_classes, config)
+    specific.to(device); encoder.to(device); decoder.to(device); classifier.to(device)
 
     ### ------ Train the sequence of tasks ------ ###
+    acc_of_task_t_at_time_t = []
+    train_sets_tasks = []
     for task in range(n_tasks):
         print(f'Training Task {task}')
         train_set = copy.copy(train_tasks[task])
 
         if task > 0:
-            gen_images, gen_labels = gen_pseudo_samples(config['n_replay'],
-                                                        tasks_labels[:task],
-                                                        decoder,
-                                                        n_classes,
-                                                        config['latent_size'],
-                                                        device)
+            gen_data = gen_pseudo_samples(config['n_replay'],
+                                          labels[:task],
+                                          decoder,
+                                          n_classes,
+                                          config['latent_size'],
+                                          device)
 
+            gen_images, gen_labels = gen_data
             train_set = utils.data.update_train_set(train_set,
                                                     gen_images,
                                                     gen_labels)
+        train_sets_tasks.append(train_set)
 
         train_loader = utils.data.get_dataloader(train_set,
                                                  config['batch_size'])
 
-        val_set = val_tasks[:task + 1] if val_tasks is not None else test_tasks[:task + 1]
+        val_set = copy.copy(test_tasks[:task + 1])
         val_loader = utils.data.get_dataloader(val_set, config['batch_size'])
 
-        test_set = test_tasks[task]
-        test_loader = utils.data.get_dataloader(test_set, batch_size=128)
+        train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, labels[:task+1], task, device)
 
-        train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, tasks_labels[:task+1], task, device)
+        test_set = copy.copy(test_tasks[task])
+        test_loader = utils.data.get_dataloader(test_set, batch_size=128)
         acc = test(encoder, specific, classifier, test_loader, device)
-        mlflow.log_metric(f'training_acc_task', acc, step=task)
         acc_of_task_t_at_time_t.append(acc)
+        mlflow.log_metric(f'training_acc_task', acc, step=task)
 
     ### ------ Testing tasks ask after training all of them ------ ###
 
-    ACCs = []
-    BWTs = []
-    for task in range(n_tasks):
-        test_set = test_tasks[task]
-        test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-        task_acc = test(encoder, specific, classifier, test_loader, device)
-        bwt = task_acc - acc_of_task_t_at_time_t[task]
-        mlflow.log_metrics({f'acc_task': task_acc,
-                            f'bwt_task': bwt},
-                           step=task)
-        ACCs.append(task_acc)
-        BWTs.append(bwt)
+    ACCs_test_set = []
+    BWTs_test_set = []
 
-    utils.plot.plot_losses(ACCs,
+    test_set = test_tasks
+    test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
+    acc_train = test(encoder, specific, classifier, test_loader, device, fname=f'{config["plt_path"]}/test_test_set.png')
+
+    for task in range(n_tasks):
+        test_set = copy.copy(test_tasks[task])
+        test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
+        acc_test = test(encoder, specific, classifier, test_loader, device)
+        bwt_test = acc_test - acc_of_task_t_at_time_t[task]
+
+        train_loader = utils.data.get_dataloader(train_sets_tasks[task], batch_size=1000)
+        acc_train = test(encoder, specific, classifier, train_loader, device, fname=f'{config["plt_path"]}/test_train_set_task_{task}.png')
+
+        mlflow.log_metrics({f'Task Accuracy Test Set': acc_test,
+                            f'Task BWT Test': bwt_test},
+                           step=task)
+
+        ACCs_test_set.append(acc_test)
+        BWTs_test_set.append(bwt_test)
+
+    utils.plot.plot_losses(ACCs_test_set,
                            xlabel='Task',
                            ylabel='Accuracy',
                            title='Test Accuracy',
                            fname=f'{config["plt_path"]}/tasks-acc.png')
 
-    avg_acc = sum(ACCs)/n_tasks
-    avg_bwt = sum(BWTs)/(n_tasks-1)
+    avg_acc_test_set = sum(ACCs_test_set)/n_tasks
+    avg_bwt_test_set = sum(BWTs_test_set)/(n_tasks-1)
+
+    mlflow.log_metrics({'Average Test Set Accuracy': avg_acc_test_set,
+                        'Average BWT': avg_bwt_test_set})
+
     with open(config['exp_path']+'/output.log', 'w+') as f:
-        for task_id, acc in enumerate(ACCs):
-            print(f'Task {task_id} - Accuracy: {(acc)*100:.02f}%', file=f)
+        for file in [None, f]:
+            print('', file=None)
+            for task_id, acc_test in enumerate(ACCs_test_set):
+                print(f'Task {task_id} - Test Set Accuracy: {(acc_test)*100:.02f}%', file=file)
 
-        print(f'Average accuracy: {avg_acc*100:.02f}%', file=f)
-        print(f'Average backward transfer: {avg_bwt*100:.02f}%', file=f)
-    print(f'Average accuracy: {avg_acc*100:.02f}%')
-    print(f'Average backward transfer: {avg_bwt*100:.02f}%')
+            print('', file=file)
+            print(f'Average Test Set Accuracy: {avg_acc_test_set*100:.02f}%', file=file)
+            print(f'Average Test Set Backward Transfer: {avg_bwt_test_set*100:.02f}%\n', file=file)
 
-
-    mlflow.log_metrics({'Average accuracy': avg_acc,
-                        'Average BWT': avg_bwt})
-
-    train_loader = utils.data.get_dataloader(train_tasks, config['batch_size'])
     test_loader = utils.data.get_dataloader(test_tasks, batch_size=1000)
+    train_loader = utils.data.get_dataloader(train_tasks, config['batch_size'])
     knn_ = knn(encoder, specific, train_loader, device)
     sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, device, 'test')
     sne(config['exp_path'], encoder, specific, classifier, knn_, train_loader, device, 'train')
 
 
 def load_config(file):
-    config = None
     with open(file, 'r') as reader:
         config = yaml.load(reader, Loader=yaml.SafeLoader)
+
+    assert config['runs'] > 0
+    assert config['arch_specific'] in ['MLP', 'Conv']
+    assert config['arch_encoder'] in ['IRCL', 'Conv']
+    assert config['arch_decoder'] in ['IRCL', 'Conv']
 
     return config
 
 
-def get_path(config, idx=-1):
-    folder = f'{config["specific_arch"]}S+{config["encoder_arch"]}E+{config["decoder_arch"]}D'
+def get_exp_path(config, idx=-1):
+    folder = f'{config["arch_specific"]}S+{config["arch_encoder"]}E+{config["arch_decoder"]}D'
     subfolder = mlflow.active_run().info.run_id if config['exp_name'] == '' else config['exp_name']
     subfolder = subfolder if idx == -1 else f'{subfolder}-{idx}'
+
     exp_path = '/'.join([config['root'],
                          config['dataset'],
-                         str(config['epochs']) + ' epochs',
+                         f'{config["epochs"]} epochs',
                          folder,
                          subfolder])
 
     plt_path = '/'.join([exp_path, config['plt_path']])
 
     aux_path = ''
-    for folder in plt_path.split('/'):
-        aux_path = aux_path + folder + '/'
+    for sub_dir in plt_path.split('/'):
+        aux_path += sub_dir + '/'
+
         if not Path(aux_path).is_dir():
             os.mkdir(aux_path)
 
@@ -465,11 +472,11 @@ def log_config(config):
 
 if __name__ == '__main__':
     config = load_config('./config.yaml')
-    assert config['runs'] > 0
+
     for idx in range(config['runs']):
-        with mlflow.start_run(experiment_id=3):
+        with mlflow.start_run(experiment_id=4):
             idx = idx if config['runs'] > 1 else -1
-            config['exp_path'] = get_path(config, idx)
+            config['exp_path'] = get_exp_path(config, idx)
             os.system('cp ./config.yaml ' + '"./' + f'{config["exp_path"]}' + '"')
             config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])
 

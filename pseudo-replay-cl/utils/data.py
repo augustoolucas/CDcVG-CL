@@ -11,67 +11,38 @@ def onehot_encoder(labels, n_classes):
 
     return labels_onehot
 
-def load_data(dataset, val=False):
+def load_data(dataset, train=True):
     if dataset == 'MNIST':
-        train_set = datasets.MNIST(root='./Datasets',
-                                   download=True,
-                                   train=True,
-                                   transform=transforms.ToTensor())
-
-        test_set = datasets.MNIST(root='./Datasets',
-                                  download=True,
-                                  train=False,
-                                  transform=transforms.ToTensor())
+        data = datasets.MNIST(root='./Datasets',
+                              download=True,
+                              train=train,
+                              transform=transforms.ToTensor())
     elif dataset == 'CIFAR10':
-        train_set = datasets.CIFAR10(root='./Datasets',
-                                     download=True,
-                                     train=True,
-                                     transform=transforms.ToTensor())
+        data = datasets.CIFAR10(root='./Datasets',
+                                download=True,
+                                train=train,
+                                transform=transforms.ToTensor())
 
-        test_set = datasets.CIFAR10(root='./Datasets',
-                                    download=True,
-                                    train=False,
-                                    transform=transforms.ToTensor())
     elif dataset == 'FashionMNIST':
-        train_set = datasets.FashionMNIST(root='./Datasets',
-                                          download=True,
-                                          train=True,
-                                          transform=transforms.ToTensor())
-
-        test_set = datasets.FashionMNIST(root='./Datasets',
-                                         download=True,
-                                         train=False,
-                                         transform=transforms.ToTensor())
+        data = datasets.FashionMNIST(root='./Datasets',
+                                     download=True,
+                                     train=train,
+                                     transform=transforms.ToTensor())
     else:
         print('Invalid dataset.')
         exit()
 
-    val_set = None
-    if val:
-        val_set_size = int(.10*len(train_set))
-        idxs = list(range(len(train_set)))
-        random.shuffle(idxs)
-        val_idxs, test_idxs = idxs[:val_set_size], idxs[val_set_size:]
-
-        val_set = copy.deepcopy(train_set)
-        val_set.data = val_set.data[val_idxs]
-        val_set.targets = val_set.targets[val_idxs]
-
-        train_set.data = train_set.data[test_idxs]
-        train_set.targets = train_set.targets[test_idxs]
-
-    return train_set, val_set, test_set
-
-def load_tasks(dataset, balanced=False, val=False):
-    train_set, val_set, test_set = load_data(dataset, val)
-    train_tasks = create_task(train_set, balanced)
-    val_tasks = create_task(val_set, balanced) if val else None
-    test_tasks = create_task(test_set, balanced)
-
-    return train_tasks, val_tasks, test_tasks
+    return data
 
 
-def create_task(dataset, balanced=False):
+def load_tasks(dataset, balanced=False, train=True):
+    data = load_data(dataset, train)
+    tasks = create_tasks(data, balanced)
+
+    return tasks
+
+
+def create_tasks(dataset, balanced=False):
     if type(dataset.targets) is list:
         n_classes = len(set(dataset.targets))
     else:
@@ -97,16 +68,16 @@ def create_task(dataset, balanced=False):
     return datasets
 
 
-def get_tasks_labels(tasks):
+def get_labels(tasks):
     tasks_labels = [list(set(np.array(task.targets).tolist())) for task in tasks]
     return tasks_labels
 
 
-def get_task_data_shape(tasks):
+def get_img_shape(tasks):
     return tasks[0][0][0].shape
 
 
-def get_tasks_classes(tasks):
+def get_classes(tasks):
     classes = [class_ for task in tasks for class_ in set(np.array(task.targets).tolist())]
     return classes
 

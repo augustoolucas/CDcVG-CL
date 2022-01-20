@@ -1,3 +1,4 @@
+import copy
 import torch
 import numpy as np
 import seaborn as sns
@@ -66,6 +67,70 @@ def multi_plots(data1, data2, xlabel, ylabel1, ylabel2, title, fname):
 
     plt.title(title)
     plt.savefig(dpi=300,
+                fname=fname,
+                bbox_inches='tight')
+    plt.close()
+
+
+def visualize_train_data(data_loader, labels, fname):
+    n_imgs = 64
+    class_imgs = {}
+    for imgs, imgs_labels in data_loader:
+        for label in labels:
+            if label not in class_imgs:
+                class_imgs[label] = imgs[imgs_labels == label]
+            else:
+                class_imgs[label] = torch.cat([class_imgs[label], imgs[imgs_labels == label]])
+
+    labels = copy.copy(labels)
+    real_labels = [labels.pop() for _ in labels[-2:]]
+    real_labels.reverse()
+    generated_labels = labels
+
+    real_imgs = torch.tensor([])
+    for label in real_labels:
+        n_class_img = int(n_imgs/len(real_labels))
+        n_class_img = n_class_img if n_imgs % len(real_labels) == 0 else n_class_img + 1
+        real_imgs = torch.cat([real_imgs, class_imgs[label][:n_class_img]])
+
+    generated_imgs = torch.tensor([])
+    for label in generated_labels:
+        n_class_img = int(n_imgs/len(generated_labels))
+        n_class_img = n_class_img if n_imgs % len(generated_labels) == 0 else n_class_img + 1
+        generated_imgs = torch.cat([generated_imgs, class_imgs[label][:n_class_img]])
+
+    shape = real_imgs[0].shape
+    shape = shape if shape[0] > shape[2] else (shape[1], shape[2], shape[0])
+    cmap = 'gray' if shape[2] == 1 else None
+    plotter = plot_samples('./', shape, 8, 8)
+    real_imgs = plotter.get_images(real_imgs[:64])
+    real_imgs = real_imgs.astype(np.uint8)
+
+    if len(generated_labels) > 0:
+        generated_imgs = plotter.get_images(generated_imgs[:64])
+        generated_imgs = generated_imgs.astype(np.uint8)
+
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+
+        ax1.imshow(generated_imgs, cmap=cmap)
+        ax1.set_xlabel('Generated')
+        ax2.imshow(real_imgs, cmap=cmap)
+        ax2.set_xlabel('Real')
+        axs = [ax1, ax2]
+    else:
+        fig, ax = plt.subplots()
+        ax.imshow(real_imgs, cmap=cmap)
+        axs = [ax]
+
+    for ax in axs:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.spines.top.set_visible(False)
+        ax.spines.bottom.set_visible(False)
+        ax.spines.right.set_visible(False)
+        ax.spines.left.set_visible(False)
+
+    plt.savefig(dpi=500,
                 fname=fname,
                 bbox_inches='tight')
     plt.close()

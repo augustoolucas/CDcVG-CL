@@ -97,10 +97,11 @@ class Decoder(nn.Module):
 
 
 class Specific(nn.Module):
-    def __init__(self, img_shape, latent_dim):
+    def __init__(self, img_shape, specific_size):
         super(Specific, self).__init__()
 
         channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
+        height = img_shape[0] if img_shape[0] > img_shape[2] else img_shape[1]
 
         self.conv_block = nn.Sequential(
             nn.Conv2d(channels, 32, kernel_size=3, padding=1, stride=1),
@@ -114,8 +115,10 @@ class Specific(nn.Module):
             nn.ELU(inplace=True),
         )
         
+        self.feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
+
         self.linear_block = nn.Sequential(
-            nn.Linear(128*7*7, latent_dim),
+            nn.Linear(np.prod(self.feat_map_dim), specific_size),
             nn.ReLU(inplace=True)
         )
 
