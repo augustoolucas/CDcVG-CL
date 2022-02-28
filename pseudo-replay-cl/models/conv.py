@@ -28,14 +28,6 @@ class Encoder(nn.Module):
             nn.ELU(inplace=True),
         )
 
-        """
-        self.linear_block = nn.Sequential(
-            nn.Linear(128*14*14, n_hidden),
-            nn.BatchNorm1d(n_hidden),
-            nn.ELU(inplace=True),
-        )
-        """
-
         feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
         self.mu = nn.Linear(np.prod(feat_map_dim), latent_dim)
         self.logvar = nn.Linear(np.prod(feat_map_dim), latent_dim)
@@ -50,7 +42,6 @@ class Encoder(nn.Module):
     def forward(self, img):
         x = self.conv_block(img)
         x = x.view(x.shape[0], -1)
-        #x = self.linear_block(x)
         mu = self.mu(x)
         logvar = self.logvar(x)
         z = self.reparameterization(mu, logvar, self.latent_dim)
@@ -115,10 +106,10 @@ class Specific(nn.Module):
             nn.ELU(inplace=True),
         )
         
-        self.feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
+        feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
 
         self.linear_block = nn.Sequential(
-            nn.Linear(np.prod(self.feat_map_dim), specific_size),
+            nn.Linear(np.prod(feat_map_dim), specific_size),
             nn.ReLU(inplace=True)
         )
 

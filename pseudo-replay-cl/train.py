@@ -15,22 +15,23 @@ from pathlib import Path
 from sklearnex import patch_sklearn
 patch_sklearn()
 from sklearn.manifold import TSNE
+from collections import defaultdict
 from matplotlib.ticker import MaxNLocator
 from sklearn.neighbors import KNeighborsClassifier as KNN
 from sklearn.metrics import accuracy_score, precision_score, confusion_matrix, ConfusionMatrixDisplay
 
-def gen_pseudo_samples(n_gen, tasks_labels, decoder, n_classes, latent_dim, device):
+def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim, device):
     decoder.eval()
 
-    labels = [label for labels in tasks_labels for label in labels]
+    labels = [label for labels in labels for label in labels]
     for label in labels:
-        y = torch.ones(size=[n_gen], dtype=torch.int64) * label
+        y = torch.ones(size=[n_samples], dtype=torch.int64) * label
         new_labels = y if label == 0 else torch.cat((new_labels, y))
 
     new_labels = new_labels[torch.randperm(new_labels.size(0))] # Shuffling the Tensor
     new_labels_onehot = utils.data.onehot_encoder(new_labels, n_classes)
 
-    z = torch.Tensor(np.random.normal(0, 1, (n_gen * len(labels), latent_dim)))
+    z = torch.Tensor(np.random.normal(0, 1, (n_samples * len(labels), latent_dim)))
 
     with torch.no_grad():
         input = torch.cat([z, new_labels_onehot], dim=1)
@@ -96,7 +97,88 @@ def gen_recon_images(encoder, decoder, data_loader, device):
     return images, recon_images
 
 
-def train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, tasks_labels, task_id, device):
+def train_cvae(config, encoder, decoder, data_loader, task_id, device):
+    optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
+                                      lr=float(config['lr_autoencoder']))
+
+    ### ------ Loss Functions ------ ###
+    pixelwise_loss = torch.nn.MSELoss(reduction='sum')
+    kl_divergence_loss = lambda var, mu: 0.5 * torch.sum(torch.exp(var) + mu**2 - 1 - var)
+
+    mlflow.log_params({'optimizer_cvae': 'Adam',
+                       'loss_fn_pixelwise': 'MSE'})
+
+    train_bar = tqdm(range(config['epochs_cvae']))
+
+    for epoch in train_bar:
+        encoder.train(); decoder.train();
+        epoch_rec_loss, epoch_kl_loss = 0, 0
+        for images, labels in data_loader:
+            encoder.zero_grad(); decoder.zero_grad()
+
+            labels_onehot = utils.data.onehot_encoder(labels, 10).to(device)
+            images = images.to(device)
+            latents, mu, var = encoder(images)
+            recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
+
+            kl_loss = kl_divergence_loss(var, mu)/len(images)
+            rec_loss = pixelwise_loss(recon_images, images)/len(images)
+            cvae_loss = rec_loss + kl_loss
+
+            cvae_loss.backward()
+            optimizer_cvae.step()
+
+            epoch_rec_loss += rec_loss.item()
+            epoch_kl_loss += kl_loss.item()
+
+        mlflow.log_metrics({f'loss_rec_task_{task_id}': epoch_rec_loss/len(data_loader),
+                            f'loss_kl_task_{task_id}': epoch_kl_loss/len(data_loader),
+                            f'loss_cvae_task_{task_id}': (epoch_rec_loss + epoch_kl_loss)/len(data_loader)},
+                           step=epoch)
+
+
+def train_classifier(config, encoder, specific, classifier, data_loader, task_id, device):
+    encoder.eval(); specific.train(); classifier.train()
+    optimizer_specific = torch.optim.Adam(specific.parameters(),
+                                          lr=float(config['lr_specific']))
+    optimizer_classifier = torch.optim.Adam(classifier.parameters(),
+                                            lr=float(config['lr_classifier']))
+
+    ### ------ Loss Function ------ ###
+    classification_loss = torch.nn.CrossEntropyLoss()
+
+    mlflow.log_params({'optimizer_specific': 'Adam',
+                       'optimizer_classifier': 'Adam',
+                       'loss_fn_classification': 'CrossEntropyLoss'})
+
+    train_bar = tqdm(range(config['epochs_classifier']))
+
+    for epoch in train_bar:
+        epoch_classifier_loss, epoch_acc = 0, 0
+        for batch_idx, (images, labels) in enumerate(data_loader, start=1):
+            specific.zero_grad(); classifier.zero_grad()
+
+            images, labels = images.to(device), labels.to(device)
+
+            with torch.no_grad():
+                latents, _, _ = encoder(images)
+
+            specific_embedding = specific(images)
+            classifier_output = classifier(specific_embedding, latents.detach())
+            classifier_loss = classification_loss(classifier_output, labels)/len(images)
+            classifier_loss.backward()
+            optimizer_classifier.step()
+            optimizer_specific.step()
+
+            output_list = torch.argmax(classifier_output, dim=1).tolist()
+            epoch_acc += accuracy_score(output_list, labels.detach().cpu().numpy())
+            epoch_classifier_loss += classifier_loss.item()
+
+        mlflow.log_metrics({f'loss_classifier_task_{task_id}': epoch_classifier_loss/len(data_loader)},
+                           step=epoch)
+
+
+def train_task(config, encoder, decoder, specific, classifier, train_loader, tasks_labels, task_id, device):
     ### ------ Optimizers ------ ###
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
                                       lr=float(config['lr_autoencoder']))
@@ -131,14 +213,13 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
     for epoch in train_bar:
         epoch_classifier_loss, epoch_rec_loss, epoch_kl_loss = 0, 0, 0
         epoch_acc = 0
-        classes = {}
+        classes_count = defaultdict(int)
         for batch_idx, (images, labels) in enumerate(train_loader, start=1):
             for cls in set(labels.tolist()):
-                classes[cls] = classes[cls] + len(labels[labels == cls]) if cls in classes else len(labels[labels == cls])
-            encoder.train(); decoder.train(); specific.train(); classifier.train()
+                classes_count[cls] += len(labels[labels == cls])
             ### ------ Training autoencoder ------ ###
+            encoder.train(); decoder.train();
             encoder.zero_grad(); decoder.zero_grad()
-            specific.zero_grad(); classifier.zero_grad()
 
             labels_onehot = utils.data.onehot_encoder(labels, 10).to(device)
             images, labels = images.to(device), labels.to(device)
@@ -148,13 +229,11 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
             kl_loss = kl_divergence_loss(var, mu)/len(images)
             rec_loss = pixelwise_loss(recon_images, images)/len(images)
             cvae_loss = rec_loss + kl_loss
-
             cvae_loss.backward()
             optimizer_cvae.step()
 
             ### ------ Training specific module and classifier ------ ###
-            encoder.eval(); decoder.eval()
-            encoder.zero_grad(); decoder.zero_grad()
+            specific.train(); classifier.train()
             specific.zero_grad(); classifier.zero_grad()
 
             specific_output = specific(images)
@@ -178,28 +257,26 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
                             f'loss_classifier_task_{task_id}': epoch_classifier_loss/len(train_loader),
                             f'loss_total_task_{task_id}': epoch_loss/len(train_loader)},
                           step=epoch)
+
         rec_loss_epochs.append(epoch_rec_loss/len(train_loader))
         kl_loss_epochs.append(epoch_kl_loss/len(train_loader))
         cvae_loss_epochs.append((epoch_rec_loss + epoch_kl_loss)/len(train_loader))
         classifier_loss_epochs.append(epoch_classifier_loss/len(train_loader))
         total_loss_epochs.append((epoch_loss/len(train_loader)))
-        val_acc = test(encoder, specific, classifier, val_loader, device, f'{task_plt_path}/epoch_{epoch}.png')
+        #val_acc = test(encoder, specific, classifier, val_loader, device, f'{task_plt_path}/epoch_{epoch}.png')
         
         train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - '
                                   f'Loss: {(epoch_loss/len(train_loader)):.03f} - '
-                                  f'Accuracy: {(epoch_acc/len(train_loader))*100:.03f}% - '
-                                  f'Val Accuracy: {(val_acc)*100:.03f}%')
-
-    real_images, recon_images = gen_recon_images(encoder, decoder, val_loader, device)
-    gen_images, _ = gen_pseudo_samples(128, tasks_labels, decoder, 10, config['latent_size'], device)
+                                  f'Accuracy: {(epoch_acc/len(train_loader))*100:.03f}% - ')
+                                  #f'Val Accuracy: {(val_acc)*100:.03f}%')
 
     fig = plt.figure()
-    plt.bar(list(classes.keys()), list(classes.values()))
+    plt.bar(list(classes_count.keys()), list(classes_count.values()))
     ax = fig.gca()
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    for idx, key in enumerate(classes):
-        ax.annotate(classes[key],
-                    xy=(idx-len(classes)*0.035, classes[key]+(max(classes.values()) - min(classes.values()))*0.025),
+    for idx, key in enumerate(classes_count):
+        ax.annotate(classes_count[key],
+                    xy=(idx-len(classes_count)*0.035, classes_count[key]+(max(classes_count.values()) - min(classes_count.values()))*0.025),
                     fontsize=10)
 
     plt.title(f'Task {task_id}')
@@ -233,8 +310,6 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, val
                            ylabel2='KL Loss',
                            title=f'Task {task_id}',
                            fname=f'{task_plt_path}/loss-rec-kl.png')
-
-    utils.plot.visualize(real_images, recon_images, gen_images, f'{task_plt_path}/images.png')
 
 
 def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type):
@@ -285,6 +360,35 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type
     utils.plot.tsne_plot(tsne_results, knn_output, f'{config["plt_path"]}/{data_type}-combined-knn-tsne.png', title)
 
 
+def train_mlp(config, encoder, specific, classifier, data_loader, device):
+    encoder.eval(); specific.eval(); classifier.train()
+
+    optimizer_classifier = torch.optim.Adam(classifier.parameters(),
+                                            lr=0.001)
+
+    ### ------ Loss Function ------ ###
+    classification_loss = torch.nn.CrossEntropyLoss()
+
+    for epoch in tqdm(range(20)):
+        epoch_loss = 0
+        for images, labels in data_loader:
+            classifier.zero_grad()
+            with torch.no_grad():
+                images = images.to(device)
+                latents, _, _ = encoder(images)
+                specific_output = specific(images)
+
+            labels = labels.to(device)
+            classifier_output = classifier(specific_output, latents.detach())
+            classifier_loss = classification_loss(classifier_output, labels)/len(images)
+            classifier_loss.backward()
+            optimizer_classifier.step()
+            epoch_loss += classifier_loss.item()
+
+        mlflow.log_metric('MLP Classifier Loss', epoch_loss, step=epoch)
+
+    return classifier
+
 def knn(encoder, specific, train_loader, device):
     encoder.eval(); specific.eval()
 
@@ -320,8 +424,8 @@ def main(config):
     np.random.seed(1)
 
     ## ------ Load Data ------ ###
-    train_tasks = utils.data.load_tasks(config['dataset'], config['balanced'], True)
-    test_tasks = utils.data.load_tasks(config['dataset'], config['balanced'], False)
+    train_tasks = utils.data.load_tasks(config['dataset'], config['balanced'], train=True)
+    test_tasks = utils.data.load_tasks(config['dataset'], config['balanced'], train=False)
 
     img_shape = utils.data.get_img_shape(train_tasks)
     classes = utils.data.get_classes(train_tasks)
@@ -345,17 +449,21 @@ def main(config):
     train_sets_tasks = []
     for task in range(n_tasks):
         print(f'Training Task {task}')
+
+        task_plt_path = f'{config["plt_path"]}/Task_{task}'
+        if not Path(task_plt_path).is_dir():
+            os.mkdir(task_plt_path)
+
         train_set = copy.copy(train_tasks[task])
 
         if task > 0:
-            gen_data = gen_pseudo_samples(config['n_replay'],
-                                          labels[:task],
-                                          decoder,
-                                          n_classes,
-                                          config['latent_size'],
-                                          device)
+            gen_images, gen_labels = gen_pseudo_samples(n_samples=config['n_replay'],
+                                                        labels=labels[:task],
+                                                        decoder=decoder,
+                                                        n_classes=n_classes,
+                                                        latent_dim=config['latent_size'],
+                                                        device=device)
 
-            gen_images, gen_labels = gen_data
             train_set = utils.data.update_train_set(train_set,
                                                     gen_images,
                                                     gen_labels)
@@ -367,13 +475,65 @@ def main(config):
         val_set = copy.copy(test_tasks[:task + 1])
         val_loader = utils.data.get_dataloader(val_set, config['batch_size'])
 
-        train_task(config, encoder, decoder, specific, classifier, train_loader, val_loader, labels[:task+1], task, device)
+        if config['decoupled_cvae_training']:
+            train_cvae(config=config,
+                       encoder=encoder,
+                       decoder=decoder,
+                       data_loader=train_loader,
+                       task_id=task,
+                       device=device)
+
+            train_classifier(config=config,
+                             encoder=encoder,
+                             specific=specific,
+                             classifier=classifier,
+                             data_loader=train_loader,
+                             task_id=task,
+                             device=device)
+
+        else:
+            train_task(config=config,
+                       encoder=encoder,
+                       decoder=decoder,
+                       specific=specific,
+                       classifier=classifier,
+                       train_loader=train_loader,
+                       tasks_labels=labels[:task+1],
+                       task_id=task,
+                       device=device)
+
+        test(encoder=encoder,
+             specific=specific,
+             classifier=classifier,
+             data_loader=val_loader,
+             device=device,
+             fname=f'{task_plt_path}/test_set.png')
+
+        test(encoder=encoder,
+             specific=specific,
+             classifier=classifier,
+             data_loader=train_loader,
+             device=device,
+             fname=f'{task_plt_path}/train_set.png')
 
         test_set = copy.copy(test_tasks[task])
         test_loader = utils.data.get_dataloader(test_set, batch_size=128)
-        acc = test(encoder, specific, classifier, test_loader, device)
+        acc = test(encoder=encoder,
+                   specific=specific,
+                   classifier=classifier,
+                   data_loader=test_loader,
+                   device=device)
         acc_of_task_t_at_time_t.append(acc)
         mlflow.log_metric(f'training_acc_task', acc, step=task)
+
+        real_images, recon_images = gen_recon_images(encoder, decoder, val_loader, device)
+        gen_images, _ = gen_pseudo_samples(n_samples=128, 
+                                           labels=labels[:task+1],
+                                           decoder=decoder,
+                                           n_classes=n_classes,
+                                           latent_dim=config['latent_size'],
+                                           device=device)
+        utils.plot.visualize(real_images, recon_images, gen_images, f'{task_plt_path}/images.png')
 
     ### ------ Testing tasks ask after training all of them ------ ###
 
@@ -424,9 +584,17 @@ def main(config):
 
     test_loader = utils.data.get_dataloader(test_tasks, batch_size=1000)
     train_loader = utils.data.get_dataloader(train_tasks, config['batch_size'])
-    knn_ = knn(encoder, specific, train_loader, device)
-    sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, device, 'test')
-    sne(config['exp_path'], encoder, specific, classifier, knn_, train_loader, device, 'train')
+    if config['plot_tsne']:
+        knn_ = knn(encoder, specific, train_loader, device)
+        sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, device, 'test')
+        sne(config['exp_path'], encoder, specific, classifier, knn_, train_loader, device, 'train')
+
+    cls = train_mlp(config, encoder, specific, classifier, train_loader, device)
+    acc = test(encoder, specific, cls, test_loader, device)
+
+    with open(f'{config["exp_path"]}/output.log', 'a') as f:
+        print(f'MLP Classifier Accuracy: {(acc*100):.02f}%', file=f)
+    print(f'MLP Classifier Accuracy: {(acc*100):.02f}%')
 
 
 def load_config(file):
@@ -441,43 +609,26 @@ def load_config(file):
     return config
 
 
-def get_exp_path(config, idx=-1):
-    folder = f'{config["arch_specific"]}S+{config["arch_encoder"]}E+{config["arch_decoder"]}D'
-    subfolder = mlflow.active_run().info.run_id if config['exp_name'] == '' else config['exp_name']
-    subfolder = subfolder if idx == -1 else f'{subfolder}-{idx}'
-
-    exp_path = '/'.join([config['root'],
-                         config['dataset'],
-                         f'{config["epochs"]} epochs',
-                         folder,
-                         subfolder])
-
+def get_exp_path(config):
+    run_id = mlflow.active_run().info.run_id
+    exp_path = '/'.join([config['root'], run_id])
     plt_path = '/'.join([exp_path, config['plt_path']])
-
-    aux_path = ''
-    for sub_dir in plt_path.split('/'):
-        aux_path += sub_dir + '/'
-
-        if not Path(aux_path).is_dir():
-            os.mkdir(aux_path)
+    os.makedirs(plt_path)
 
     return exp_path
 
 
 def log_config(config):
-    for k, v in config.items():
-        if k in ['root', 'runs', 'exp_name', 'plt_path']:
-            continue
-        mlflow.log_param(k, v)
+    log_config = {k: v for k,v in config.items() if k not in ['root', 'runs', 'exp_name', 'plt_path', 'exp_path']}
+    mlflow.log_params(log_config)
 
 if __name__ == '__main__':
     config = load_config('./config.yaml')
 
-    for idx in range(config['runs']):
-        with mlflow.start_run(experiment_id=4):
-            idx = idx if config['runs'] > 1 else -1
-            config['exp_path'] = get_exp_path(config, idx)
-            os.system('cp ./config.yaml ' + '"./' + f'{config["exp_path"]}' + '"')
+    for _ in range(config['runs']):
+        with mlflow.start_run(experiment_id=5):
+            config['exp_path'] = get_exp_path(config)
+            os.system(f'cp ./config.yaml ./{config["exp_path"]}/')
             config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])
 
             print(f'MLflow Run ID: {mlflow.active_run().info.run_id}')
