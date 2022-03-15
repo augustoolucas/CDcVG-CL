@@ -26,7 +26,7 @@ def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim, device
     labels = [label for labels in labels for label in labels]
     for label in labels:
         y = torch.ones(size=[n_samples], dtype=torch.int64) * label
-        new_labels = y if label == 0 else torch.cat((new_labels, y))
+        new_labels = y if label == labels[0] else torch.cat((new_labels, y))
 
     new_labels = new_labels[torch.randperm(new_labels.size(0))] # Shuffling the Tensor
     new_labels_onehot = utils.data.onehot_encoder(new_labels, n_classes)
@@ -97,6 +97,23 @@ def gen_recon_images(encoder, decoder, data_loader, device):
     return images, recon_images
 
 
+def get_features(encoder, specific, imgs, device):
+    encoder.eval(); specific.eval()
+
+    all_z = torch.empty(size=(0, 32))
+    all_specific = torch.empty(size=(0, 20))
+    all_combined = torch.empty(size=(0, 52))
+    with torch.no_grad():
+        for img in imgs:
+            latent, _, _ = encoder(img.unsqueeze(0).to(device))
+            all_z = torch.cat((all_z, latent.to('cpu')))
+            all_specific = torch.cat((all_specific, specific(img.unsqueeze(0).to(device)).to('cpu')))
+            all_combined = torch.cat((all_combined,
+                                      torch.cat((all_specific[-1], all_z[-1])).unsqueeze(0)))
+
+    return all_z, all_specific, all_combined
+
+
 def train_cvae(config, encoder, decoder, data_loader, task_id, device):
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
                                       lr=float(config['lr_autoencoder']))
@@ -140,7 +157,8 @@ def train_cvae(config, encoder, decoder, data_loader, task_id, device):
 def train_classifier(config, encoder, specific, classifier, data_loader, task_id, device):
     encoder.eval(); specific.train(); classifier.train()
     optimizer_specific = torch.optim.Adam(specific.parameters(),
-                                          lr=float(config['lr_specific']))
+                                          lr=float(config['lr_specific']),
+                                          weight_decay=0.00001)
     optimizer_classifier = torch.optim.Adam(classifier.parameters(),
                                             lr=float(config['lr_classifier']))
 
@@ -536,7 +554,6 @@ def main(config):
         utils.plot.visualize(real_images, recon_images, gen_images, f'{task_plt_path}/images.png')
 
     ### ------ Testing tasks ask after training all of them ------ ###
-
     ACCs_test_set = []
     BWTs_test_set = []
 
@@ -560,6 +577,7 @@ def main(config):
         ACCs_test_set.append(acc_test)
         BWTs_test_set.append(bwt_test)
 
+    ### ------ Logging ------ ###
     utils.plot.plot_losses(ACCs_test_set,
                            xlabel='Task',
                            ylabel='Accuracy',
@@ -589,12 +607,58 @@ def main(config):
         sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, device, 'test')
         sne(config['exp_path'], encoder, specific, classifier, knn_, train_loader, device, 'train')
 
+    """
     cls = train_mlp(config, encoder, specific, classifier, train_loader, device)
     acc = test(encoder, specific, cls, test_loader, device)
 
     with open(f'{config["exp_path"]}/output.log', 'a') as f:
         print(f'MLP Classifier Accuracy: {(acc*100):.02f}%', file=f)
     print(f'MLP Classifier Accuracy: {(acc*100):.02f}%')
+    """
+
+    if config['save_images']:
+        img_path = f'{config["exp_path"]}/real_images'
+        os.makedirs(img_path)
+        for task in range(n_tasks):
+            utils.plot.save_images(train_tasks[task].data, train_tasks[task].targets, img_path)
+
+        img_path = f'{config["exp_path"]}/generated_images'
+        os.makedirs(img_path)
+
+        for task in range(n_tasks):
+            all_z = torch.empty(size=(0, 32))
+            all_specific = torch.empty(size=(0, 20))
+            all_combined = torch.empty(size=(0, 52))
+            all_labels = []
+            z, specif, combined = get_features(encoder,
+                                               specific,
+                                               [img for img, _ in test_tasks[task]],
+                                               device)
+            all_z = torch.cat((all_z, z))
+            all_specific = torch.cat((all_specific, specif))
+            all_combined = torch.cat((all_combined, combined))
+            all_labels.extend(test_tasks[task].targets.tolist())
+
+            gen_images, gen_labels = gen_pseudo_samples(n_samples=1024, 
+                                                        labels=[labels[task]],
+                                                        decoder=decoder,
+                                                        n_classes=n_classes,
+                                                        latent_dim=config['latent_size'],
+                                                        device=device)
+
+            z, specif, combined = get_features(encoder, specific, gen_images, device)
+            all_z = torch.cat((all_z, z))
+            all_specific = torch.cat((all_specific, specif))
+            all_combined = torch.cat((all_combined, combined))
+            all_labels.extend((10+gen_labels).tolist())
+            k = lambda x: f'{x} Real' if x < 10 else f'{x-10} Generated'
+            keys = {idx: k(idx) for idx in all_labels}
+            all_labels = [keys[idx] for idx in all_labels]
+
+            tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
+            tsne_results = tsne.fit_transform(all_combined.detach().numpy())
+            utils.plot.tsne_plot(tsne_results, all_labels, f'{config["plt_path"]}/combined_task_{task}.png')
+            utils.plot.save_images(gen_images, gen_labels, img_path)
 
 
 def load_config(file):
@@ -626,7 +690,7 @@ if __name__ == '__main__':
     config = load_config('./config.yaml')
 
     for _ in range(config['runs']):
-        with mlflow.start_run(experiment_id=5):
+        with mlflow.start_run(experiment_id=6, run_name=''):
             config['exp_path'] = get_exp_path(config)
             os.system(f'cp ./config.yaml ./{config["exp_path"]}/')
             config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])

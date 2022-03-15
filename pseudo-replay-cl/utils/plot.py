@@ -1,3 +1,4 @@
+import os
 import copy
 import torch
 import numpy as np
@@ -7,6 +8,19 @@ from PIL import Image
 from imageio import imwrite
 from matplotlib.ticker import MaxNLocator
 from torchvision.transforms import ToPILImage
+
+def save_images(images, labels, root):
+    for label in set(labels.tolist()):
+        imgs = images[labels == label]
+        path = f'{root}/{label}'
+        if not os.path.isdir(path):
+            os.makedirs(path)
+
+        for idx, img in enumerate(imgs):
+            if idx == 128:
+                break
+            ToPILImage()(img).save(f'{path}/{idx:03d}.png')
+
 
 def show_image(image):
     ToPILImage()(image).show()
