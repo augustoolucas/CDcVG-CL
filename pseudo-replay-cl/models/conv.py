@@ -95,18 +95,23 @@ class Specific(nn.Module):
         height = img_shape[0] if img_shape[0] > img_shape[2] else img_shape[1]
 
         self.conv_block = nn.Sequential(
-            nn.Conv2d(channels, 32, kernel_size=3, padding=1, stride=1),
-            nn.BatchNorm2d(32),
-            nn.ELU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=2),
-            nn.BatchNorm2d(64),
-            nn.ELU(inplace=True),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=2),
-            nn.BatchNorm2d(128),
-            nn.ELU(inplace=True),
+            nn.Conv2d(channels, 16, kernel_size=3, padding=1, stride=1),
+            #nn.BatchNorm2d(32),
+            nn.MaxPool2d(kernel_size=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 32, kernel_size=3, padding=1, stride=1),
+            #nn.BatchNorm2d(64),
+            nn.MaxPool2d(kernel_size=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=1),
+            nn.MaxPool2d(kernel_size=2),
+            nn.ReLU(inplace=True),
+            #nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=2),
+            #nn.BatchNorm2d(128),
+            #nn.ELU(inplace=True),
         )
         
-        feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
+        feat_map_dim = (64, 3, 3) if height == 28 else (128, 8, 8)
 
         self.linear_block = nn.Sequential(
             nn.Linear(np.prod(feat_map_dim), specific_size),
@@ -115,6 +120,7 @@ class Specific(nn.Module):
 
     def forward(self, img):
         x = self.conv_block(img)
+        #breakpoint()
         x = x.view(x.shape[0], -1)
         x = self.linear_block(x)
         return x
