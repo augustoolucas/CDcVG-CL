@@ -96,22 +96,20 @@ class Specific(nn.Module):
 
         self.conv_block = nn.Sequential(
             nn.Conv2d(channels, 16, kernel_size=3, padding=1, stride=1),
-            #nn.BatchNorm2d(32),
             nn.MaxPool2d(kernel_size=2),
+            #nn.BatchNorm2d(16),
             nn.ReLU(inplace=True),
             nn.Conv2d(16, 32, kernel_size=3, padding=1, stride=1),
-            #nn.BatchNorm2d(64),
             nn.MaxPool2d(kernel_size=2),
+            #nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=1),
             nn.MaxPool2d(kernel_size=2),
+            #nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            #nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=2),
-            #nn.BatchNorm2d(128),
-            #nn.ELU(inplace=True),
         )
         
-        feat_map_dim = (64, 3, 3) if height == 28 else (128, 8, 8)
+        feat_map_dim = (64, 3, 3) if height == 28 else (64, 4, 4)
 
         self.linear_block = nn.Sequential(
             nn.Linear(np.prod(feat_map_dim), specific_size),
