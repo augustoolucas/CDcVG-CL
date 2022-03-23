@@ -115,7 +115,7 @@ def get_dataloader(dataset, batch_size):
 
     loader = DataLoader(dataset,
                         batch_size,
-                        num_workers=0,
+                        num_workers=4,
                         pin_memory=True,
                         shuffle=True)
     return loader
