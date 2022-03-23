@@ -157,8 +157,7 @@ def train_cvae(config, encoder, decoder, data_loader, task_id, device):
 def train_classifier(config, encoder, specific, classifier, data_loader, task_id, device):
     encoder.eval(); specific.train(); classifier.train()
     optimizer_specific = torch.optim.Adam(specific.parameters(),
-                                          lr=float(config['lr_specific']),
-                                          weight_decay=0.00001)
+                                          lr=float(config['lr_specific']))
     optimizer_classifier = torch.optim.Adam(classifier.parameters(),
                                             lr=float(config['lr_classifier']))
 
@@ -625,39 +624,41 @@ def main(config):
         img_path = f'{config["exp_path"]}/generated_images'
         os.makedirs(img_path)
 
-        for task in range(n_tasks):
-            all_z = torch.empty(size=(0, 32))
-            all_specific = torch.empty(size=(0, 20))
-            all_combined = torch.empty(size=(0, 52))
-            all_labels = []
-            z, specif, combined = get_features(encoder,
-                                               specific,
-                                               [img for img, _ in test_tasks[task]],
-                                               device)
-            all_z = torch.cat((all_z, z))
-            all_specific = torch.cat((all_specific, specif))
-            all_combined = torch.cat((all_combined, combined))
-            all_labels.extend(test_tasks[task].targets.tolist())
+    for task in range(n_tasks):
+        all_z = torch.empty(size=(0, 32))
+        all_specific = torch.empty(size=(0, 20))
+        all_combined = torch.empty(size=(0, 52))
+        all_labels = []
+        z, specif, combined = get_features(encoder,
+                                           specific,
+                                           [img for img, _ in test_tasks[task]],
+                                           device)
+        all_z = torch.cat((all_z, z))
+        all_specific = torch.cat((all_specific, specif))
+        all_combined = torch.cat((all_combined, combined))
+        all_labels.extend(test_tasks[task].targets.tolist())
 
-            gen_images, gen_labels = gen_pseudo_samples(n_samples=1024, 
-                                                        labels=[labels[task]],
-                                                        decoder=decoder,
-                                                        n_classes=n_classes,
-                                                        latent_dim=config['latent_size'],
-                                                        device=device)
+        gen_images, gen_labels = gen_pseudo_samples(n_samples=1024, 
+                                                    labels=[labels[task]],
+                                                    decoder=decoder,
+                                                    n_classes=n_classes,
+                                                    latent_dim=config['latent_size'],
+                                                    device=device)
 
-            z, specif, combined = get_features(encoder, specific, gen_images, device)
-            all_z = torch.cat((all_z, z))
-            all_specific = torch.cat((all_specific, specif))
-            all_combined = torch.cat((all_combined, combined))
-            all_labels.extend((10+gen_labels).tolist())
-            k = lambda x: f'{x} Real' if x < 10 else f'{x-10} Generated'
-            keys = {idx: k(idx) for idx in all_labels}
-            all_labels = [keys[idx] for idx in all_labels]
+        z, specif, combined = get_features(encoder, specific, gen_images, device)
+        all_z = torch.cat((all_z, z))
+        all_specific = torch.cat((all_specific, specif))
+        all_combined = torch.cat((all_combined, combined))
+        all_labels.extend((10+gen_labels).tolist())
+        k = lambda x: f'{x} Real' if x < 10 else f'{x-10} Generated'
+        keys = {idx: k(idx) for idx in all_labels}
+        all_labels = [keys[idx] for idx in all_labels]
 
-            tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
-            tsne_results = tsne.fit_transform(all_combined.detach().numpy())
-            utils.plot.tsne_plot(tsne_results, all_labels, f'{config["plt_path"]}/combined_task_{task}.png')
+        tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
+        tsne_results = tsne.fit_transform(all_combined.detach().numpy())
+        utils.plot.tsne_plot(tsne_results, all_labels, f'{config["plt_path"]}/combined_task_{task}.png')
+
+        if config['save_images']:
             utils.plot.save_images(gen_images, gen_labels, img_path)
 
 
