@@ -172,6 +172,7 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
 
     for epoch in train_bar:
         epoch_classifier_loss, epoch_acc = 0, 0
+        classifier.train()
         for batch_idx, (images, labels) in enumerate(data_loader, start=1):
             specific.zero_grad(); classifier.zero_grad()
 
@@ -193,6 +194,22 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
 
         mlflow.log_metrics({f'loss_classifier_task_{task_id}': epoch_classifier_loss/len(data_loader)},
                            step=epoch)
+
+        for _ in range(5):
+            classifier.eval()
+            for batch_idx, (images, labels) in enumerate(data_loader, start=1):
+                specific.zero_grad(); classifier.zero_grad()
+
+                images, labels = images.to(device), labels.to(device)
+
+                with torch.no_grad():
+                    latents, _, _ = encoder(images)
+
+                specific_embedding = specific(images)
+                classifier_output = classifier(specific_embedding, latents.detach())
+                classifier_loss = classification_loss(classifier_output, labels)
+                classifier_loss.backward()
+                optimizer_specific.step()
 
 
 def train_task(config, encoder, decoder, specific, classifier, train_loader, tasks_labels, task_id, device):
