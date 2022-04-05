@@ -81,9 +81,10 @@ def train_cvae(config, encoder, decoder, data_loader, task_id=None):
             epoch_rec_loss += rec_loss.item()
             epoch_kl_loss += kl_loss.item()
 
-        rec_loss_str = f'Loss Reconstruction Task {task_id}' if task_id is not None else 'Loss Reconstruction'
-        kl_loss_str = f'Loss KL Task {task_id}' if task_id is not None else 'Loss KL'
-        cvae_loss_str = f'Loss CVAE Task {task_id}' if task_id is not None else 'Loss CVAE'
+        log_str = lambda s: s if task_id is None else f'{s} Task {task_id}'
+        rec_loss_str = log_str('Loss Reconstruction')
+        cvae_loss_str = log_str('Loss CVAE')
+        kl_loss_str = log_str('Loss KL')
         mlflow.log_metrics({rec_loss_str: epoch_rec_loss/len(data_loader),
                             kl_loss_str: epoch_kl_loss/len(data_loader),
                             cvae_loss_str: (epoch_rec_loss + epoch_kl_loss)/len(data_loader)},
@@ -132,7 +133,7 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
             epoch_acc += accuracy_score(output_list, labels.detach().cpu().numpy())
             epoch_classifier_loss += classifier_loss.item()
 
-        cls_loss_str = f'Loss Classifier Task {task_id}' if task_id is not None else 'Loss Classifier' 
+        cls_loss_str = 'Loss Classifier' if task_id is None else f'Loss Classifier Task {task_id}' 
         mlflow.log_metrics({cls_loss_str: epoch_classifier_loss/len(data_loader)},
                            step=epoch)
 
