@@ -701,7 +701,11 @@ def get_exp_path(config):
 
 
 def log_config(config):
-    log_config = {k: v for k,v in config.items() if k not in ['root', 'runs', 'exp_name', 'plt_path', 'exp_path']}
+    log_config = {k: v for k,v in config.items() if k not in ['root',
+                                                              'runs',
+                                                              'exp_name',
+                                                              'plt_path',
+                                                              'exp_path']}
     mlflow.log_params(log_config)
 
 if __name__ == '__main__':
