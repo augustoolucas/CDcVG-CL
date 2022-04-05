@@ -1,5 +1,6 @@
 ---
 ### Training parameters ###
+use_amp: false
 decoupled_cvae_training: true
 latent_size: 32
 n_replay: 5000 # per class
