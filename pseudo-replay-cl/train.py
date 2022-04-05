@@ -15,12 +15,13 @@ from pathlib import Path
 from sklearnex import patch_sklearn
 patch_sklearn()
 from sklearn.manifold import TSNE
+from models.utils import DEVICE
 from collections import defaultdict
 from matplotlib.ticker import MaxNLocator
 from sklearn.neighbors import KNeighborsClassifier as KNN
 from sklearn.metrics import accuracy_score, precision_score, confusion_matrix, ConfusionMatrixDisplay
 
-def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim, device):
+def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim):
     decoder.eval()
 
     labels = [label for labels in labels for label in labels]
@@ -39,7 +40,7 @@ def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim, device
         new_images = torch.Tensor([])
 
         for chunk in input:
-            gen_images = decoder(chunk.to(device))
+            gen_images = decoder(chunk.to(DEVICE))
             gen_images = gen_images.to('cpu')
             new_images = torch.cat([new_images, gen_images])
         torch.cuda.empty_cache()
@@ -47,7 +48,7 @@ def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim, device
     return new_images, new_labels
 
 
-def test(encoder, specific, classifier, data_loader, device, fname=None):
+def test(encoder, specific, classifier, data_loader, fname=None):
     encoder.eval(); classifier.eval(); specific.eval()
 
     with torch.no_grad():
@@ -55,7 +56,7 @@ def test(encoder, specific, classifier, data_loader, device, fname=None):
         all_outputs = []
         all_labels = []
         for images, labels in data_loader:
-            images = images.to(device)
+            images = images.to(DEVICE)
             latents, _, _ = encoder(images)
             specific_output = specific(images)
             classifier_output = classifier(specific_output, latents.detach())
@@ -82,14 +83,14 @@ def test(encoder, specific, classifier, data_loader, device, fname=None):
     return batch_acc 
 
 
-def gen_recon_images(encoder, decoder, data_loader, device):
+def gen_recon_images(encoder, decoder, data_loader):
     encoder.eval(); decoder.eval()
 
     ### Generate reconstructed images ###
     with torch.no_grad():
         images, labels = next(iter(data_loader))
-        labels_onehot = utils.data.onehot_encoder(labels, 10).to(device)
-        images = images.to(device)
+        labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
+        images = images.to(DEVICE)
         latents, _, _ = encoder(images)
         images = images.to('cpu')
         recon_images = decoder(torch.cat([latents, labels_onehot], dim=1)).to('cpu')
@@ -97,7 +98,7 @@ def gen_recon_images(encoder, decoder, data_loader, device):
     return images, recon_images
 
 
-def get_features(encoder, specific, imgs, device):
+def get_features(encoder, specific, imgs):
     encoder.eval(); specific.eval()
 
     all_z = torch.empty(size=(0, 32))
@@ -105,16 +106,16 @@ def get_features(encoder, specific, imgs, device):
     all_combined = torch.empty(size=(0, 52))
     with torch.no_grad():
         for img in imgs:
-            latent, _, _ = encoder(img.unsqueeze(0).to(device))
+            latent, _, _ = encoder(img.unsqueeze(0).to(DEVICE))
             all_z = torch.cat((all_z, latent.to('cpu')))
-            all_specific = torch.cat((all_specific, specific(img.unsqueeze(0).to(device)).to('cpu')))
+            all_specific = torch.cat((all_specific, specific(img.unsqueeze(0).to(DEVICE)).to('cpu')))
             all_combined = torch.cat((all_combined,
                                       torch.cat((all_specific[-1], all_z[-1])).unsqueeze(0)))
 
     return all_z, all_specific, all_combined
 
 
-def train_cvae(config, encoder, decoder, data_loader, task_id, device):
+def train_cvae(config, encoder, decoder, data_loader, task_id):
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
                                       lr=float(config['lr_autoencoder']))
 
@@ -133,8 +134,8 @@ def train_cvae(config, encoder, decoder, data_loader, task_id, device):
         for images, labels in data_loader:
             encoder.zero_grad(); decoder.zero_grad()
 
-            labels_onehot = utils.data.onehot_encoder(labels, 10).to(device)
-            images = images.to(device)
+            labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
+            images = images.to(DEVICE)
             latents, mu, var = encoder(images)
             recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
 
@@ -154,7 +155,7 @@ def train_cvae(config, encoder, decoder, data_loader, task_id, device):
                            step=epoch)
 
 
-def train_classifier(config, encoder, specific, classifier, data_loader, task_id, device):
+def train_classifier(config, encoder, specific, classifier, data_loader, task_id):
     encoder.eval(); specific.train(); classifier.train()
     optimizer_specific = torch.optim.Adam(specific.parameters(),
                                           lr=float(config['lr_specific']))
@@ -176,7 +177,7 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
         for batch_idx, (images, labels) in enumerate(data_loader, start=1):
             specific.zero_grad(); classifier.zero_grad()
 
-            images, labels = images.to(device), labels.to(device)
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
 
             with torch.no_grad():
                 latents, _, _ = encoder(images)
@@ -195,12 +196,12 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
         mlflow.log_metrics({f'loss_classifier_task_{task_id}': epoch_classifier_loss/len(data_loader)},
                            step=epoch)
 
-        for _ in range(5):
+        for _ in range(0):
             classifier.eval()
             for batch_idx, (images, labels) in enumerate(data_loader, start=1):
                 specific.zero_grad(); classifier.zero_grad()
 
-                images, labels = images.to(device), labels.to(device)
+                images, labels = images.to(DEVICE), labels.to(DEVICE)
 
                 with torch.no_grad():
                     latents, _, _ = encoder(images)
@@ -212,7 +213,7 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
                 optimizer_specific.step()
 
 
-def train_task(config, encoder, decoder, specific, classifier, train_loader, tasks_labels, task_id, device):
+def train_task(config, encoder, decoder, specific, classifier, train_loader, tasks_labels, task_id):
     ### ------ Optimizers ------ ###
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
                                       lr=float(config['lr_autoencoder']))
@@ -255,8 +256,8 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
             encoder.train(); decoder.train();
             encoder.zero_grad(); decoder.zero_grad()
 
-            labels_onehot = utils.data.onehot_encoder(labels, 10).to(device)
-            images, labels = images.to(device), labels.to(device)
+            labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
             latents, mu, var = encoder(images)
             recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
 
@@ -297,7 +298,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
         cvae_loss_epochs.append((epoch_rec_loss + epoch_kl_loss)/len(train_loader))
         classifier_loss_epochs.append(epoch_classifier_loss/len(train_loader))
         total_loss_epochs.append((epoch_loss/len(train_loader)))
-        #val_acc = test(encoder, specific, classifier, val_loader, device, f'{task_plt_path}/epoch_{epoch}.png')
+        #val_acc = test(encoder, specific, classifier, val_loader, f'{task_plt_path}/epoch_{epoch}.png')
         
         train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - '
                                   f'Loss: {(epoch_loss/len(train_loader)):.03f} - '
@@ -346,7 +347,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
                            fname=f'{task_plt_path}/loss-rec-kl.png')
 
 
-def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type):
+def sne(path, encoder, specific, classifier, knn, data_loader, data_type):
     encoder.eval(); classifier.eval(); specific.eval()
 
     with torch.no_grad():
@@ -356,7 +357,7 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type
         combined_list = []
         classifier_out_list = []
         for images, labels in data_loader:
-            images = images.to(device)
+            images = images.to(DEVICE)
             latents, _, _ = encoder(images)
             specific_output = specific(images)
             classifier_output = classifier(specific_output, latents.detach())
@@ -394,7 +395,7 @@ def sne(path, encoder, specific, classifier, knn, data_loader, device, data_type
     utils.plot.tsne_plot(tsne_results, knn_output, f'{config["plt_path"]}/{data_type}-combined-knn-tsne.png', title)
 
 
-def train_mlp(config, encoder, specific, classifier, data_loader, device):
+def train_mlp(config, encoder, specific, classifier, data_loader):
     encoder.eval(); specific.eval(); classifier.train()
 
     optimizer_classifier = torch.optim.Adam(classifier.parameters(),
@@ -408,11 +409,11 @@ def train_mlp(config, encoder, specific, classifier, data_loader, device):
         for images, labels in data_loader:
             classifier.zero_grad()
             with torch.no_grad():
-                images = images.to(device)
+                images = images.to(DEVICE)
                 latents, _, _ = encoder(images)
                 specific_output = specific(images)
 
-            labels = labels.to(device)
+            labels = labels.to(DEVICE)
             classifier_output = classifier(specific_output, latents.detach())
             classifier_loss = classification_loss(classifier_output, labels)/len(images)
             classifier_loss.backward()
@@ -423,7 +424,7 @@ def train_mlp(config, encoder, specific, classifier, data_loader, device):
 
     return classifier
 
-def knn(encoder, specific, train_loader, device):
+def knn(encoder, specific, train_loader):
     encoder.eval(); specific.eval()
 
     knn = KNN(n_neighbors=3, n_jobs=-1)
@@ -431,7 +432,7 @@ def knn(encoder, specific, train_loader, device):
         combined_list = []
         labels_list = []
         for images, labels in train_loader:
-            images = images.to(device)
+            images = images.to(DEVICE)
             latents, _, _ = encoder(images)
             specific_output = specific(images)
 
@@ -467,18 +468,14 @@ def main(config):
     n_tasks = len(train_tasks)
     n_classes = len(classes)
 
-    ### ------ Setting device ------ ###
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'Device: {device}')
-
     ### ------ Loading Models ------ ###
     specific = models.utils.load_specific_module(img_shape, config)
     encoder = models.utils.load_encoder(img_shape, config)
     decoder = models.utils.load_decoder(img_shape, n_classes, config)
     classifier = models.utils.load_classifier(n_classes, config)
-    specific.to(device); encoder.to(device); decoder.to(device); classifier.to(device)
-
+    specific.to(DEVICE); encoder.to(DEVICE); decoder.to(DEVICE); classifier.to(DEVICE)
     ### ------ Train the sequence of tasks ------ ###
+
     acc_of_task_t_at_time_t = []
     train_sets_tasks = []
     for task in range(n_tasks):
@@ -495,8 +492,7 @@ def main(config):
                                                         labels=labels[:task],
                                                         decoder=decoder,
                                                         n_classes=n_classes,
-                                                        latent_dim=config['latent_size'],
-                                                        device=device)
+                                                        latent_dim=config['latent_size'])
 
             train_set = utils.data.update_train_set(train_set,
                                                     gen_images,
@@ -531,21 +527,18 @@ def main(config):
                        classifier=classifier,
                        train_loader=train_loader,
                        tasks_labels=labels[:task+1],
-                       task_id=task,
-                       device=device)
+                       task_id=task)
 
         models.utils.test(encoder=encoder,
              specific=specific,
              classifier=classifier,
              data_loader=val_loader,
-             device=device,
              fname=f'{task_plt_path}/test_set.png')
 
         models.utils.test(encoder=encoder,
              specific=specific,
              classifier=classifier,
              data_loader=train_loader,
-             device=device,
              fname=f'{task_plt_path}/train_set.png')
 
         test_set = copy.copy(test_tasks[task])
@@ -553,18 +546,17 @@ def main(config):
         acc = models.utils.test(encoder=encoder,
                    specific=specific,
                    classifier=classifier,
-                   data_loader=test_loader,
-                   device=device)
+                   data_loader=test_loader)
         acc_of_task_t_at_time_t.append(acc)
         mlflow.log_metric(f'training_acc_task', acc, step=task)
 
-        real_images, recon_images = gen_recon_images(encoder, decoder, val_loader, device)
+        real_images, recon_images = gen_recon_images(encoder, decoder, val_loader)
         gen_images, _ = gen_pseudo_samples(n_samples=128, 
                                            labels=labels[:task+1],
                                            decoder=decoder,
                                            n_classes=n_classes,
                                            latent_dim=config['latent_size'],
-                                           device=device)
+                                           )
         utils.plot.visualize(real_images, recon_images, gen_images, f'{task_plt_path}/images.png')
 
     ### ------ Testing tasks ask after training all of them ------ ###
@@ -573,16 +565,16 @@ def main(config):
 
     test_set = test_tasks
     test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-    acc_train = models.utils.test(encoder, specific, classifier, test_loader, device, fname=f'{config["plt_path"]}/test_test_set.png')
+    acc_train = models.utils.test(encoder, specific, classifier, test_loader, fname=f'{config["plt_path"]}/test_test_set.png')
 
     for task in range(n_tasks):
         test_set = copy.copy(test_tasks[task])
         test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-        acc_test = models.utils.test(encoder, specific, classifier, test_loader, device)
+        acc_test = models.utils.test(encoder, specific, classifier, test_loader)
         bwt_test = acc_test - acc_of_task_t_at_time_t[task]
 
         train_loader = utils.data.get_dataloader(train_sets_tasks[task], batch_size=1000)
-        acc_train = models.utils.test(encoder, specific, classifier, train_loader, device, fname=f'{config["plt_path"]}/test_train_set_task_{task}.png')
+        acc_train = models.utils.test(encoder, specific, classifier, train_loader, fname=f'{config["plt_path"]}/test_train_set_task_{task}.png')
 
         mlflow.log_metrics({f'Task Accuracy Test Set': acc_test,
                             f'Task BWT Test': bwt_test},
@@ -617,13 +609,13 @@ def main(config):
     test_loader = utils.data.get_dataloader(test_tasks, batch_size=1000)
     train_loader = utils.data.get_dataloader(train_tasks, config['batch_size'])
     if config['plot_tsne']:
-        knn_ = knn(encoder, specific, train_loader, device)
-        sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, device, 'test')
-        sne(config['exp_path'], encoder, specific, classifier, knn_, train_loader, device, 'train')
+        knn_ = knn(encoder, specific, train_loader)
+        sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, 'test')
+        sne(config['exp_path'], encoder, specific, classifier, knn_, train_loader, 'train')
 
     """
-    cls = train_mlp(config, encoder, specific, classifier, train_loader, device)
-    acc = test(encoder, specific, cls, test_loader, device)
+    cls = train_mlp(config, encoder, specific, classifier, train_loader)
+    acc = test(encoder, specific, cls, test_loader)
 
     with open(f'{config["exp_path"]}/output.log', 'a') as f:
         print(f'MLP Classifier Accuracy: {(acc*100):.02f}%', file=f)
@@ -646,8 +638,8 @@ def main(config):
         all_labels = []
         z, specif, combined = get_features(encoder,
                                            specific,
-                                           [img for img, _ in test_tasks[task]],
-                                           device)
+                                           [img for img, _ in test_tasks[task]])
+
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
         all_combined = torch.cat((all_combined, combined))
@@ -657,10 +649,9 @@ def main(config):
                                                     labels=[labels[task]],
                                                     decoder=decoder,
                                                     n_classes=n_classes,
-                                                    latent_dim=config['latent_size'],
-                                                    device=device)
+                                                    latent_dim=config['latent_size'])
 
-        z, specif, combined = get_features(encoder, specific, gen_images, device)
+        z, specif, combined = get_features(encoder, specific, gen_images)
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
         all_combined = torch.cat((all_combined, combined))
