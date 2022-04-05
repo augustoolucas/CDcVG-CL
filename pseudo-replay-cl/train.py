@@ -510,20 +510,18 @@ def main(config):
         val_loader = utils.data.get_dataloader(val_set, config['batch_size'])
 
         if config['decoupled_cvae_training']:
-            train_cvae(config=config,
+            models.utils.train_cvae(config=config,
                        encoder=encoder,
                        decoder=decoder,
                        data_loader=train_loader,
-                       task_id=task,
-                       device=device)
+                       task_id=task)
 
-            train_classifier(config=config,
+            models.utils.train_classifier(config=config,
                              encoder=encoder,
                              specific=specific,
                              classifier=classifier,
                              data_loader=train_loader,
-                             task_id=task,
-                             device=device)
+                             task_id=task)
 
         else:
             train_task(config=config,
@@ -536,14 +534,14 @@ def main(config):
                        task_id=task,
                        device=device)
 
-        test(encoder=encoder,
+        models.utils.test(encoder=encoder,
              specific=specific,
              classifier=classifier,
              data_loader=val_loader,
              device=device,
              fname=f'{task_plt_path}/test_set.png')
 
-        test(encoder=encoder,
+        models.utils.test(encoder=encoder,
              specific=specific,
              classifier=classifier,
              data_loader=train_loader,
@@ -552,7 +550,7 @@ def main(config):
 
         test_set = copy.copy(test_tasks[task])
         test_loader = utils.data.get_dataloader(test_set, batch_size=128)
-        acc = test(encoder=encoder,
+        acc = models.utils.test(encoder=encoder,
                    specific=specific,
                    classifier=classifier,
                    data_loader=test_loader,
@@ -575,16 +573,16 @@ def main(config):
 
     test_set = test_tasks
     test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-    acc_train = test(encoder, specific, classifier, test_loader, device, fname=f'{config["plt_path"]}/test_test_set.png')
+    acc_train = models.utils.test(encoder, specific, classifier, test_loader, device, fname=f'{config["plt_path"]}/test_test_set.png')
 
     for task in range(n_tasks):
         test_set = copy.copy(test_tasks[task])
         test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-        acc_test = test(encoder, specific, classifier, test_loader, device)
+        acc_test = models.utils.test(encoder, specific, classifier, test_loader, device)
         bwt_test = acc_test - acc_of_task_t_at_time_t[task]
 
         train_loader = utils.data.get_dataloader(train_sets_tasks[task], batch_size=1000)
-        acc_train = test(encoder, specific, classifier, train_loader, device, fname=f'{config["plt_path"]}/test_train_set_task_{task}.png')
+        acc_train = models.utils.test(encoder, specific, classifier, train_loader, device, fname=f'{config["plt_path"]}/test_train_set_task_{task}.png')
 
         mlflow.log_metrics({f'Task Accuracy Test Set': acc_test,
                             f'Task BWT Test': bwt_test},
