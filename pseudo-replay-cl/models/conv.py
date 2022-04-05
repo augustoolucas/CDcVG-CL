@@ -16,6 +16,7 @@ class Encoder(nn.Module):
         assert channels in [1, 3]
         assert height in [28, 32]
 
+        """
         self.conv_block = nn.Sequential(
             nn.Conv2d(channels, 32, kernel_size=3, padding=1, stride=1),
             nn.BatchNorm2d(32),
@@ -28,7 +29,20 @@ class Encoder(nn.Module):
             nn.ELU(inplace=True),
         )
 
-        feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
+        """
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(channels, 16, kernel_size=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 32, kernel_size=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=3),
+            nn.ReLU(inplace=True),
+        )
+
+        #feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
+        feat_map_dim = (128, 20, 20) if height == 28 else (128, 8, 8)
         self.mu = nn.Linear(np.prod(feat_map_dim), latent_dim)
         self.logvar = nn.Linear(np.prod(feat_map_dim), latent_dim)
         self.latent_dim = latent_dim
@@ -58,7 +72,8 @@ class Decoder(nn.Module):
         assert channels in [1, 3]
         assert height in [28, 32]
 
-        self.feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
+        #self.feat_map_dim = (128, 7, 7) if height == 28 else (128, 8, 8)
+        self.feat_map_dim = (128, 20, 20) if height == 28 else (128, 8, 8)
 
         # conditional generation
         input_dim = latent_dim + n_classes if use_label else latent_dim
@@ -69,6 +84,7 @@ class Decoder(nn.Module):
             nn.ELU(inplace=True),
         )
 
+        """
         self.conv_block = nn.Sequential(
             nn.ConvTranspose2d(128, 64, kernel_size=3, padding=1, stride=2),
             nn.BatchNorm2d(64),
@@ -79,6 +95,19 @@ class Decoder(nn.Module):
             nn.ConvTranspose2d(32, channels, kernel_size=2, padding=0, stride=1),
             nn.Sigmoid(),
         )
+
+        """
+        self.conv_block = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, kernel_size=3),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(64, 32, kernel_size=3),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(32, 16, kernel_size=3),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(16, channels, kernel_size=3),
+            nn.Sigmoid(),
+        )
+
         self.img_shape = img_shape
 
     def forward(self, z):
@@ -94,22 +123,30 @@ class Specific(nn.Module):
         channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
         height = img_shape[0] if img_shape[0] > img_shape[2] else img_shape[1]
 
+        """
         self.conv_block = nn.Sequential(
             nn.Conv2d(channels, 16, kernel_size=3, padding=1, stride=1),
             nn.MaxPool2d(kernel_size=2),
-            #nn.BatchNorm2d(16),
             nn.ReLU(inplace=True),
             nn.Conv2d(16, 32, kernel_size=3, padding=1, stride=1),
             nn.MaxPool2d(kernel_size=2),
-            #nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 64, kernel_size=3, padding=1, stride=1),
             nn.MaxPool2d(kernel_size=2),
-            #nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
         )
-        
-        feat_map_dim = (64, 3, 3) if height == 28 else (64, 4, 4)
+        """
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(channels, 64, kernel_size=3, padding=1, stride=1),
+            nn.MaxPool2d(kernel_size=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1, stride=1),
+            nn.MaxPool2d(kernel_size=2),
+            nn.ReLU(inplace=True),
+        )
+
+        #feat_map_dim = (64, 3, 3) if height == 28 else (64, 4, 4)
+        feat_map_dim = (128, 7, 7) if height == 28 else (64, 4, 4)
 
         self.linear_block = nn.Sequential(
             nn.Linear(np.prod(feat_map_dim), specific_size),
