@@ -424,6 +424,7 @@ def train_mlp(config, encoder, specific, classifier, data_loader):
 
     return classifier
 
+
 def knn(encoder, specific, train_loader):
     encoder.eval(); specific.eval()
 
@@ -533,12 +534,14 @@ def main(config):
              specific=specific,
              classifier=classifier,
              data_loader=val_loader,
+             use_amp=config['use_amp'],
              fname=f'{task_plt_path}/test_set.png')
 
         models.utils.test(encoder=encoder,
              specific=specific,
              classifier=classifier,
              data_loader=train_loader,
+             use_amp=config['use_amp'],
              fname=f'{task_plt_path}/train_set.png')
 
         test_set = copy.copy(test_tasks[task])
@@ -546,7 +549,8 @@ def main(config):
         acc = models.utils.test(encoder=encoder,
                    specific=specific,
                    classifier=classifier,
-                   data_loader=test_loader)
+                   data_loader=test_loader,
+                   use_amp=config['use_amp'])
         acc_of_task_t_at_time_t.append(acc)
         mlflow.log_metric(f'training_acc_task', acc, step=task)
 
@@ -565,16 +569,16 @@ def main(config):
 
     test_set = test_tasks
     test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-    acc_train = models.utils.test(encoder, specific, classifier, test_loader, fname=f'{config["plt_path"]}/test_test_set.png')
+    acc_train = models.utils.test(encoder, specific, classifier, test_loader, use_amp=config['use_amp'], fname=f'{config["plt_path"]}/test_test_set.png')
 
     for task in range(n_tasks):
         test_set = copy.copy(test_tasks[task])
         test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-        acc_test = models.utils.test(encoder, specific, classifier, test_loader)
+        acc_test = models.utils.test(encoder, specific, classifier, test_loader, use_amp=config['use_amp'])
         bwt_test = acc_test - acc_of_task_t_at_time_t[task]
 
         train_loader = utils.data.get_dataloader(train_sets_tasks[task], batch_size=1000)
-        acc_train = models.utils.test(encoder, specific, classifier, train_loader, fname=f'{config["plt_path"]}/test_train_set_task_{task}.png')
+        acc_train = models.utils.test(encoder, specific, classifier, train_loader, use_amp=config['use_amp'], fname=f'{config["plt_path"]}/test_train_set_task_{task}.png')
 
         mlflow.log_metrics({f'Task Accuracy Test Set': acc_test,
                             f'Task BWT Test': bwt_test},

@@ -48,6 +48,7 @@ def load_classifier(n_classes, config):
 
 
 def train_cvae(config, encoder, decoder, data_loader, task_id=None):
+    scaler = amp.GradScaler(enabled=config['use_amp'])
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
                                       lr=float(config['lr_autoencoder']))
 
@@ -68,15 +69,18 @@ def train_cvae(config, encoder, decoder, data_loader, task_id=None):
 
             labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
             images = images.to(DEVICE)
-            latents, mu, var = encoder(images)
-            recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
 
-            kl_loss = kl_divergence_loss(var, mu)/len(images)
-            rec_loss = pixelwise_loss(recon_images, images)/len(images)
-            cvae_loss = rec_loss + kl_loss
+            with amp.autocast(enabled=config['use_amp']):
+                latents, mu, var = encoder(images)
+                recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
 
-            cvae_loss.backward()
-            optimizer_cvae.step()
+                kl_loss = kl_divergence_loss(var, mu)/len(images)
+                rec_loss = pixelwise_loss(recon_images, images)/len(images)
+                cvae_loss = rec_loss + kl_loss
+
+            scaler.scale(cvae_loss).backward()
+            scaler.step(optimizer_cvae)
+            scaler.update()
 
             epoch_rec_loss += rec_loss.item()
             epoch_kl_loss += kl_loss.item()
@@ -154,7 +158,7 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
                 optimizer_specific.step()
 
 
-def test(encoder, specific, classifier, data_loader, device, fname=None):
+def test(encoder, specific, classifier, data_loader, use_amp=False, fname=None):
     encoder.eval(); classifier.eval(); specific.eval()
 
     with torch.no_grad():
@@ -162,10 +166,11 @@ def test(encoder, specific, classifier, data_loader, device, fname=None):
         all_outputs = []
         all_labels = []
         for images, labels in data_loader:
-            images = images.to(device)
-            latents, _, _ = encoder(images)
-            specific_output = specific(images)
-            classifier_output = classifier(specific_output, latents.detach())
+            images = images.to(DEVICE)
+            with amp.autocast(enabled=use_amp):
+                latents, _, _ = encoder(images)
+                specific_output = specific(images)
+                classifier_output = classifier(specific_output, latents.detach())
 
             classifier_output = torch.argmax(classifier_output, dim=1).tolist()
             batch_acc += accuracy_score(classifier_output, labels.tolist())
