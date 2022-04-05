@@ -474,7 +474,7 @@ def main(config):
     encoder = models.utils.load_encoder(img_shape, config)
     decoder = models.utils.load_decoder(img_shape, n_classes, config)
     classifier = models.utils.load_classifier(n_classes, config)
-    specific.to(DEVICE); encoder.to(DEVICE); decoder.to(DEVICE); classifier.to(DEVICE)
+
     ### ------ Train the sequence of tasks ------ ###
 
     acc_of_task_t_at_time_t = []

@@ -15,6 +15,8 @@ def load_specific_module(img_shape, config):
     elif config['arch_specific'] == 'Conv':
         specific = models.conv.Specific(img_shape=img_shape, specific_size=20)
 
+    specific = specific.to(DEVICE)
+
     return specific
 
 def load_encoder(img_shape, config):
@@ -25,6 +27,7 @@ def load_encoder(img_shape, config):
     elif config['arch_encoder'] == 'Conv':
         encoder = models.conv.Encoder(img_shape=img_shape,
                                       latent_dim=config['latent_size'])
+    encoder = encoder.to(DEVICE)
 
     return encoder
 
@@ -35,16 +38,24 @@ def load_decoder(img_shape, n_classes, config):
                                       config['latent_size'],
                                       n_classes)
     elif config['arch_decoder'] == 'Conv':
-        decoder = models.conv.Decoder(img_shape, config['latent_size'], n_classes)
+        decoder = models.conv.Decoder(img_shape,
+                                      config['latent_size'],
+                                      n_classes)
+
+    decoder = decoder.to(DEVICE)
 
     return decoder
 
 def load_classifier(n_classes, config):
-    return models.mlp.Classifier(invariant_size=config['latent_size'],
-                                 specific_size=20,
-                                 classification_n_hidden=40,
-                                 n_classes=n_classes,
-                                 softmax=config['softmax'])
+    classifier = models.mlp.Classifier(invariant_size=config['latent_size'],
+                                       specific_size=20,
+                                       classification_n_hidden=40,
+                                       n_classes=n_classes,
+                                       softmax=config['softmax'])
+
+    classifier = classifier.to(DEVICE)
+
+    return classifier
 
 
 def train_cvae(config, encoder, decoder, data_loader, task_id=None):
