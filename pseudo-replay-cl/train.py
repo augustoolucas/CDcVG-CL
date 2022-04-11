@@ -12,6 +12,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
+from torch.cuda import amp
 from sklearnex import patch_sklearn
 patch_sklearn()
 from sklearn.manifold import TSNE
@@ -21,7 +22,7 @@ from matplotlib.ticker import MaxNLocator
 from sklearn.neighbors import KNeighborsClassifier as KNN
 from sklearn.metrics import accuracy_score, precision_score, confusion_matrix, ConfusionMatrixDisplay
 
-def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim):
+def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim, use_amp=False):
     decoder.eval()
 
     labels = [label for labels in labels for label in labels]
@@ -40,7 +41,8 @@ def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim):
         new_images = torch.Tensor([])
 
         for chunk in input:
-            gen_images = decoder(chunk.to(DEVICE))
+            with amp.autocast(enabled=use_amp):
+                gen_images = decoder(chunk.to(DEVICE))
             gen_images = gen_images.to('cpu')
             new_images = torch.cat([new_images, gen_images])
         torch.cuda.empty_cache()
@@ -48,7 +50,7 @@ def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim):
     return new_images, new_labels
 
 
-def gen_recon_images(encoder, decoder, data_loader):
+def gen_recon_images(encoder, decoder, data_loader, use_amp=False):
     encoder.eval(); decoder.eval()
 
     ### Generate reconstructed images ###
@@ -56,14 +58,16 @@ def gen_recon_images(encoder, decoder, data_loader):
         images, labels = next(iter(data_loader))
         labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
         images = images.to(DEVICE)
-        latents, _, _ = encoder(images)
+        with amp.autocast(enabled=use_amp):
+            latents, _, _ = encoder(images)
+            recon_images = decoder(torch.cat([latents, labels_onehot], dim=1)).to('cpu')
+
         images = images.to('cpu')
-        recon_images = decoder(torch.cat([latents, labels_onehot], dim=1)).to('cpu')
 
     return images, recon_images
 
 
-def get_features(encoder, specific, imgs):
+def get_features(encoder, specific, imgs, use_amp=False):
     encoder.eval(); specific.eval()
 
     all_z = torch.empty(size=(0, 32))
@@ -71,7 +75,8 @@ def get_features(encoder, specific, imgs):
     all_combined = torch.empty(size=(0, 52))
     with torch.no_grad():
         for img in imgs:
-            latent, _, _ = encoder(img.unsqueeze(0).to(DEVICE))
+            with amp.autocast(enabled=use_amp):
+                latent, _, _ = encoder(img.unsqueeze(0).to(DEVICE))
             all_z = torch.cat((all_z, latent.to('cpu')))
             all_specific = torch.cat((all_specific, specific(img.unsqueeze(0).to(DEVICE)).to('cpu')))
             all_combined = torch.cat((all_combined,
@@ -292,7 +297,7 @@ def train_mlp(config, encoder, specific, classifier, data_loader):
     return classifier
 
 
-def knn(encoder, specific, train_loader):
+def knn(encoder, specific, train_loader, use_amp=False):
     encoder.eval(); specific.eval()
 
     knn = KNN(n_neighbors=3, n_jobs=-1)
@@ -301,8 +306,9 @@ def knn(encoder, specific, train_loader):
         labels_list = []
         for images, labels in train_loader:
             images = images.to(DEVICE)
-            latents, _, _ = encoder(images)
-            specific_output = specific(images)
+            with amp.autocast(enabled=use_amp):
+                latents, _, _ = encoder(images)
+                specific_output = specific(images)
 
             combined_list.extend(torch.cat([latents, specific_output], dim=1).cpu().numpy())
             labels_list.extend(labels.cpu().tolist())
@@ -356,11 +362,13 @@ def main(config):
         train_set = copy.copy(train_tasks[task])
 
         if task > 0:
-            gen_images, gen_labels = gen_pseudo_samples(n_samples=config['n_replay'],
-                                                        labels=labels[:task],
-                                                        decoder=decoder,
-                                                        n_classes=n_classes,
-                                                        latent_dim=config['latent_size'])
+            gen_images, gen_labels = gen_pseudo_samples(
+                                                n_samples=config['n_replay'],
+                                                labels=labels[:task],
+                                                decoder=decoder,
+                                                n_classes=n_classes,
+                                                latent_dim=config['latent_size']
+                                                )
 
             train_set = utils.data.update_train_set(train_set,
                                                     gen_images,
@@ -418,17 +426,22 @@ def main(config):
                    classifier=classifier,
                    data_loader=test_loader,
                    use_amp=config['use_amp'])
+
         acc_of_task_t_at_time_t.append(acc)
         mlflow.log_metric(f'training_acc_task', acc, step=task)
 
-        real_images, recon_images = gen_recon_images(encoder, decoder, val_loader)
+        real_images, recon_images = gen_recon_images(encoder,
+                                                     decoder,
+                                                     val_loader)
         gen_images, _ = gen_pseudo_samples(n_samples=128, 
                                            labels=labels[:task+1],
                                            decoder=decoder,
                                            n_classes=n_classes,
-                                           latent_dim=config['latent_size'],
-                                           )
-        utils.plot.visualize(real_images, recon_images, gen_images, f'{task_plt_path}/images.png')
+                                           latent_dim=config['latent_size'])
+        utils.plot.visualize(real_images,
+                             recon_images,
+                             gen_images,
+                             f'{task_plt_path}/images.png')
 
     ### ------ Testing tasks ask after training all of them ------ ###
     ACCs_test_set = []
@@ -436,16 +449,34 @@ def main(config):
 
     test_set = test_tasks
     test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-    acc_train = models.utils.test(encoder, specific, classifier, test_loader, use_amp=config['use_amp'], fname=f'{config["plt_path"]}/test_test_set.png')
+    acc_train = models.utils.test(
+                                encoder,
+                                specific,
+                                classifier,
+                                test_loader,
+                                use_amp=config['use_amp'],
+                                fname=f'{config["plt_path"]}/test_test_set.png'
+                                )
 
     for task in range(n_tasks):
         test_set = copy.copy(test_tasks[task])
         test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-        acc_test = models.utils.test(encoder, specific, classifier, test_loader, use_amp=config['use_amp'])
+        acc_test = models.utils.test(encoder,
+                                     specific,
+                                     classifier,
+                                     test_loader,
+                                     use_amp=config['use_amp'])
         bwt_test = acc_test - acc_of_task_t_at_time_t[task]
 
         train_loader = utils.data.get_dataloader(train_sets_tasks[task], batch_size=1000)
-        acc_train = models.utils.test(encoder, specific, classifier, train_loader, use_amp=config['use_amp'], fname=f'{config["plt_path"]}/test_train_set_task_{task}.png')
+        acc_train = models.utils.test(
+                                    encoder,
+                                    specific,
+                                    classifier,
+                                    train_loader,
+                                    use_amp=config['use_amp'],
+                                    fname=f'{config["plt_path"]}/test_train_set_task_{task}.png'
+                                    )
 
         mlflow.log_metrics({f'Task Accuracy Test Set': acc_test,
                             f'Task BWT Test': bwt_test},
@@ -471,18 +502,33 @@ def main(config):
         for file in [None, f]:
             print('', file=None)
             for task_id, acc_test in enumerate(ACCs_test_set):
-                print(f'Task {task_id} - Test Set Accuracy: {(acc_test)*100:.02f}%', file=file)
+                print(f'Task {task_id} - Test Set Accuracy: {(acc_test)*100:.02f}%',
+                      file=file)
 
             print('', file=file)
-            print(f'Average Test Set Accuracy: {avg_acc_test_set*100:.02f}%', file=file)
-            print(f'Average Test Set Backward Transfer: {avg_bwt_test_set*100:.02f}%\n', file=file)
+            print(f'Average Test Set Accuracy: {avg_acc_test_set*100:.02f}%',
+                  file=file)
+            print(f'Average Test Set Backward Transfer: {avg_bwt_test_set*100:.02f}%\n',
+                  file=file)
 
     test_loader = utils.data.get_dataloader(test_tasks, batch_size=1000)
     train_loader = utils.data.get_dataloader(train_tasks, config['batch_size'])
     if config['plot_tsne']:
         knn_ = knn(encoder, specific, train_loader)
-        sne(config['exp_path'], encoder, specific, classifier, knn_, test_loader, 'test')
-        sne(config['exp_path'], encoder, specific, classifier, knn_, train_loader, 'train')
+        sne(config['exp_path'],
+            encoder,
+            specific,
+            classifier,
+            knn_,
+            test_loader,
+            'test')
+        sne(config['exp_path'],
+            encoder,
+            specific,
+            classifier,
+            knn_,
+            train_loader,
+            'train')
 
     """
     cls = train_mlp(config, encoder, specific, classifier, train_loader)
@@ -497,7 +543,9 @@ def main(config):
         img_path = f'{config["exp_path"]}/real_images'
         os.makedirs(img_path)
         for task in range(n_tasks):
-            utils.plot.save_images(train_tasks[task].data, train_tasks[task].targets, img_path)
+            utils.plot.save_images(train_tasks[task].data,
+                                   train_tasks[task].targets,
+                                   img_path)
 
         img_path = f'{config["exp_path"]}/generated_images'
         os.makedirs(img_path)
@@ -509,31 +557,40 @@ def main(config):
         all_labels = []
         z, specif, combined = get_features(encoder,
                                            specific,
-                                           [img for img, _ in test_tasks[task]])
+                                           [img for img, _ in test_tasks[task]],
+                                           config['use_amp'])
 
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
         all_combined = torch.cat((all_combined, combined))
         all_labels.extend(test_tasks[task].targets.tolist())
 
-        gen_images, gen_labels = gen_pseudo_samples(n_samples=1024, 
-                                                    labels=[labels[task]],
-                                                    decoder=decoder,
-                                                    n_classes=n_classes,
-                                                    latent_dim=config['latent_size'])
+        gen_images, gen_labels = gen_pseudo_samples(
+                                                n_samples=1024, 
+                                                labels=[labels[task]],
+                                                decoder=decoder,
+                                                n_classes=n_classes,
+                                                latent_dim=config['latent_size'],
+                                                use_amp=config['use_amp']
+                                                )
 
-        z, specif, combined = get_features(encoder, specific, gen_images)
+        z, specif, combined = get_features(encoder,
+                                           specific,
+                                           gen_images,
+                                           config['use_amp'])
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
         all_combined = torch.cat((all_combined, combined))
-        all_labels.extend((10+gen_labels).tolist())
-        k = lambda x: f'{x} Real' if x < 10 else f'{x-10} Generated'
+        all_labels.extend((10 + gen_labels).tolist())
+        k = lambda x: f'{x} Real' if x < 10 else f'{x - 10} Generated'
         keys = {idx: k(idx) for idx in all_labels}
         all_labels = [keys[idx] for idx in all_labels]
 
         tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
         tsne_results = tsne.fit_transform(all_combined.detach().numpy())
-        utils.plot.tsne_plot(tsne_results, all_labels, f'{config["plt_path"]}/combined_task_{task}.png')
+        utils.plot.tsne_plot(tsne_results,
+                             all_labels,
+                             f'{config["plt_path"]}/combined_task_{task}.png')
 
         if config['save_images']:
             utils.plot.save_images(gen_images, gen_labels, img_path)
