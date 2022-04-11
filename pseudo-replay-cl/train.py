@@ -5,6 +5,8 @@ import torch
 import mlflow
 import models
 import random
+import optuna
+import joblib
 import utils.data
 import utils.plot
 import numpy as np
@@ -492,7 +494,8 @@ def main(config):
                            title='Test Accuracy',
                            fname=f'{config["plt_path"]}/tasks-acc.png')
 
-    avg_acc_test_set = sum(ACCs_test_set)/n_tasks
+    avg_acc_test_set = np.average(ACCs_test_set)
+    stdev_acc_test_set = np.std(ACCs_test_set)
     avg_bwt_test_set = sum(BWTs_test_set)/(n_tasks-1)
 
     mlflow.log_metrics({'Average Test Set Accuracy': avg_acc_test_set,
@@ -566,7 +569,7 @@ def main(config):
         all_labels.extend(test_tasks[task].targets.tolist())
 
         gen_images, gen_labels = gen_pseudo_samples(
-                                                n_samples=1024, 
+                                                n_samples=1024,
                                                 labels=[labels[task]],
                                                 decoder=decoder,
                                                 n_classes=n_classes,
@@ -595,6 +598,7 @@ def main(config):
         if config['save_images']:
             utils.plot.save_images(gen_images, gen_labels, img_path)
 
+    return avg_acc_test_set, stdev_acc_test_set
 
 def load_config(file):
     with open(file, 'r') as reader:
@@ -625,16 +629,51 @@ def log_config(config):
                                                               'exp_path']}
     mlflow.log_params(log_config)
 
+def run(trial=None):
+    with mlflow.start_run(experiment_id=11, run_name=''):
+        config = load_config('./config.yaml')
+        config['exp_path'] = get_exp_path(config)
+        os.system(f'cp ./config.yaml ./{config["exp_path"]}/')
+        config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])
+
+        print(f'MLflow Run ID: {mlflow.active_run().info.run_id}')
+
+        ### ------ Optuna ------ ###
+        if trial is not None:
+            config['lr_specific'] = trial.suggest_categorical(
+                                                    'lr_specific',
+                                                    [1e-3, 1e-4, 1e-5, 1e-6]
+                                                    )
+            config['lr_classifier'] = trial.suggest_categorical(
+                                                    'lr_classifier',
+                                                    [1e-3, 1e-4, 1e-5, 1e-6]
+                                                    )
+            config['lr_autoencoder'] = trial.suggest_categorical(
+                                                    'lr_autoencoder',
+                                                    [1e-4, 1e-5, 1e-6]
+                                                    )
+            config['epochs_classifier'] = trial.suggest_categorical(
+                                                    'epochs_classifier',
+                                                    [5, 10, 15, 20, 25, 30]
+                                                    )
+            config['epochs_cvae'] = trial.suggest_categorical(
+                                                    'epochs_cvae',
+                                                    [5, 10, 15, 20, 25, 30,
+                                                     35, 40, 45, 50, 75, 100]
+                                                    )
+
+        log_config(config)
+        avg_acc, stdev_acc = main(config)
+        mlflow.log_artifacts(config['exp_path'])
+
+    return avg_acc, stdev_acc
+
 if __name__ == '__main__':
-    config = load_config('./config.yaml')
+    if not os.path.exists('study.pkl'):
+        study = optuna.create_study(directions=['maximize', 'minimize'])
+    else:
+        study = joblib.load('study.pkl')
 
-    for _ in range(config['runs']):
-        with mlflow.start_run(experiment_id=6, run_name=''):
-            config['exp_path'] = get_exp_path(config)
-            os.system(f'cp ./config.yaml ./{config["exp_path"]}/')
-            config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])
-
-            print(f'MLflow Run ID: {mlflow.active_run().info.run_id}')
-            log_config(config)
-            main(config)
-            mlflow.log_artifacts(config['exp_path'])
+    study.optimize(run, timeout=3600*(9))
+    joblib.dump(study, 'study.pkl')
+    print("Number of finished trials: ", len(study.trials))
