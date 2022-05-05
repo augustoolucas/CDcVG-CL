@@ -88,7 +88,8 @@ def get_features(encoder, specific, imgs, use_amp=False):
     return all_z, all_specific, all_combined
 
 
-def train_task(config, encoder, decoder, specific, classifier, train_loader, tasks_labels, task_id):
+def train_task(config, encoder, decoder, specific, classifier, train_loader, tasks_labels, task_id, discriminator=None):
+    scaler = amp.GradScaler(enabled=config['use_amp'])
     ### ------ Optimizers ------ ###
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
                                       lr=float(config['lr_autoencoder']))
@@ -96,6 +97,15 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
                                           lr=float(config['lr_specific']))
     optimizer_classifier = torch.optim.Adam(classifier.parameters(),
                                             lr=float(config['lr_classifier']))
+
+    if discriminator is not None:
+        optimizer_discriminator = torch.optim.Adam(
+                                        discriminator.parameters(),
+                                        lr=float(config['lr_discriminator'])
+                                        )
+        discriminator_loss = torch.nn.BCEWithLogitsLoss()
+        discriminator.train()
+        real_label, recon_label = 1, 0
 
     mlflow.log_params({'optimizer_cvae': 'Adam',
                        'optimizer_specific': 'Adam',
@@ -133,25 +143,58 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
 
             labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
             images, labels = images.to(DEVICE), labels.to(DEVICE)
-            latents, mu, var = encoder(images)
-            recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
+            with amp.autocast(enabled=config['use_amp']):
+                latents, mu, var = encoder(images)
 
-            kl_loss = kl_divergence_loss(var, mu)/len(images)
-            rec_loss = pixelwise_loss(recon_images, images)/len(images)
-            cvae_loss = rec_loss + kl_loss
-            cvae_loss.backward()
-            optimizer_cvae.step()
+                if discriminator is not None:
+                    discriminator.zero_grad()
+                    disc_output = discriminator(images).view(-1)
+                    disc_labels = torch.full((len(images),),
+                                             real_label,
+                                             dtype=torch.float,
+                                             device=DEVICE)
+                    lossD_real = discriminator_loss(disc_output, disc_labels)
+                    with amp.autocast(enabled=False):
+                        scaler.scale(lossD_real).backward()
+
+                recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
+
+                if discriminator is not None:
+                    disc_output = discriminator(recon_images.detach()).view(-1)
+                    disc_labels.fill_(recon_label)
+                    lossD_recon = discriminator_loss(disc_output, disc_labels)
+                    with amp.autocast(enabled=False):
+                        scaler.scale(lossD_recon).backward()
+                        scaler.step(optimizer_discriminator)
+
+                if discriminator is not None:
+                    decoder.zero_grad()
+                    disc_output = discriminator(recon_images).view(-1)
+                    disc_labels.fill_(real_label)
+                    lossG = discriminator_loss(disc_output, disc_labels)
+
+                kl_loss = kl_divergence_loss(var, mu)/len(images)
+                rec_loss = pixelwise_loss(recon_images, images)/len(images)
+                cvae_loss = rec_loss + kl_loss
+
+            if discriminator is not None:
+                cvae_loss += lossG
+
+            scaler.scale(cvae_loss).backward()
+            scaler.step(optimizer_cvae)
 
             ### ------ Training specific module and classifier ------ ###
             specific.train(); classifier.train()
             specific.zero_grad(); classifier.zero_grad()
 
-            specific_output = specific(images)
-            classifier_output = classifier(specific_output, latents.detach())
-            classifier_loss = classification_loss(classifier_output, labels)/len(images)
-            classifier_loss.backward()
-            optimizer_classifier.step()
-            optimizer_specific.step()
+            with amp.autocast(enabled=config['use_amp']):
+                specific_output = specific(images)
+                classifier_output = classifier(specific_output, latents.detach())
+                classifier_loss = classification_loss(classifier_output, labels)/len(images)
+            scaler.scale(classifier_loss).backward()
+            scaler.step(optimizer_classifier)
+            scaler.step(optimizer_specific)
+            scaler.update()
 
             output_list = torch.argmax(classifier_output, dim=1).tolist()
             epoch_acc += accuracy_score(output_list, labels.detach().cpu().numpy())
@@ -174,7 +217,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
         classifier_loss_epochs.append(epoch_classifier_loss/len(train_loader))
         total_loss_epochs.append((epoch_loss/len(train_loader)))
         #val_acc = test(encoder, specific, classifier, val_loader, f'{task_plt_path}/epoch_{epoch}.png')
-        
+
         train_bar.set_description(f'Epoch: {(epoch + 1)}/{config["epochs"]} - '
                                   f'Loss: {(epoch_loss/len(train_loader)):.03f} - '
                                   f'Accuracy: {(epoch_acc/len(train_loader))*100:.03f}% - ')
@@ -317,7 +360,7 @@ def knn(encoder, specific, train_loader, use_amp=False):
             labels_list.extend(labels.cpu().tolist())
 
         knn.fit(combined_list, labels_list)
-    
+
     return knn
 
 
@@ -409,6 +452,7 @@ def main(config):
                        decoder=decoder,
                        specific=specific,
                        classifier=classifier,
+                       discriminator=discriminator,
                        train_loader=train_loader,
                        tasks_labels=labels[:task+1],
                        task_id=task)
