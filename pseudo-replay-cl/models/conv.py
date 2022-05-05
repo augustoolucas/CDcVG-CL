@@ -117,7 +117,41 @@ class Specific(nn.Module):
 
     def forward(self, img):
         x = self.conv_block(img)
-        #breakpoint()
         x = x.view(x.shape[0], -1)
         x = self.linear_block(x)
         return x
+
+
+class Discriminator(nn.Module):
+    def __init__(self, img_shape):
+        super().__init__()
+
+        channels = img_shape[0] if img_shape[0] < img_shape[2] else img_shape[2]
+        height = img_shape[0] if img_shape[0] > img_shape[2] else img_shape[1]
+
+        assert channels in [1, 3]
+        assert height in [28, 32]
+
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(channels, 16, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
+
+        feat_map_dim = (128, 2, 2) if height == 28 else (128, 2, 2)
+        self.linear_block = nn.Sequential(nn.Linear(np.prod(feat_map_dim), 1))
+
+    def forward(self, img):
+        x = self.conv_block(img)
+        x = x.view(x.shape[0], -1)
+        x = self.linear_block(x)
+        return x
+

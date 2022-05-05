@@ -7,6 +7,7 @@ import models
 import random
 import optuna
 import joblib
+import pickle
 import utils.data
 import utils.plot
 import numpy as np
@@ -350,6 +351,10 @@ def main(config):
     decoder = models.utils.load_decoder(img_shape, n_classes, config)
     classifier = models.utils.load_classifier(n_classes, config)
 
+    discriminator = None
+    if config['use_discriminator']:
+        discriminator = models.utils.load_discriminator(img_shape, config)
+
     ### ------ Train the sequence of tasks ------ ###
 
     acc_of_task_t_at_time_t = []
@@ -385,17 +390,18 @@ def main(config):
 
         if config['decoupled_cvae_training']:
             models.utils.train_cvae(config=config,
-                       encoder=encoder,
-                       decoder=decoder,
-                       data_loader=train_loader,
-                       task_id=task)
+                                    encoder=encoder,
+                                    decoder=decoder,
+                                    discriminator=discriminator,
+                                    data_loader=train_loader,
+                                    task_id=task)
 
             models.utils.train_classifier(config=config,
-                             encoder=encoder,
-                             specific=specific,
-                             classifier=classifier,
-                             data_loader=train_loader,
-                             task_id=task)
+                                          encoder=encoder,
+                                          specific=specific,
+                                          classifier=classifier,
+                                          data_loader=train_loader,
+                                          task_id=task)
 
         else:
             train_task(config=config,
@@ -435,7 +441,7 @@ def main(config):
         real_images, recon_images = gen_recon_images(encoder,
                                                      decoder,
                                                      val_loader)
-        gen_images, _ = gen_pseudo_samples(n_samples=128, 
+        gen_images, _ = gen_pseudo_samples(n_samples=128,
                                            labels=labels[:task+1],
                                            decoder=decoder,
                                            n_classes=n_classes,
@@ -558,10 +564,12 @@ def main(config):
         all_specific = torch.empty(size=(0, 20))
         all_combined = torch.empty(size=(0, 52))
         all_labels = []
-        z, specif, combined = get_features(encoder,
-                                           specific,
-                                           [img for img, _ in test_tasks[task]],
-                                           config['use_amp'])
+        z, specif, combined = get_features(
+                                        encoder,
+                                        specific,
+                                        [img for img, _ in test_tasks[task]],
+                                        config['use_amp']
+                                        )
 
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
@@ -569,13 +577,13 @@ def main(config):
         all_labels.extend(test_tasks[task].targets.tolist())
 
         gen_images, gen_labels = gen_pseudo_samples(
-                                                n_samples=1024,
-                                                labels=[labels[task]],
-                                                decoder=decoder,
-                                                n_classes=n_classes,
-                                                latent_dim=config['latent_size'],
-                                                use_amp=config['use_amp']
-                                                )
+                                            n_samples=1024,
+                                            labels=[labels[task]],
+                                            decoder=decoder,
+                                            n_classes=n_classes,
+                                            latent_dim=config['latent_size'],
+                                            use_amp=config['use_amp']
+                                            )
 
         z, specif, combined = get_features(encoder,
                                            specific,
@@ -589,7 +597,13 @@ def main(config):
         keys = {idx: k(idx) for idx in all_labels}
         all_labels = [keys[idx] for idx in all_labels]
 
-        tsne = TSNE(n_components=2, verbose=0, perplexity=40, n_iter=300, init='pca', learning_rate=200.0, n_jobs=-1)
+        tsne = TSNE(n_components=2,
+                    verbose=0,
+                    perplexity=40,
+                    n_iter=300,
+                    init='pca',
+                    learning_rate=200.0,
+                    n_jobs=-1)
         tsne_results = tsne.fit_transform(all_combined.detach().numpy())
         utils.plot.tsne_plot(tsne_results,
                              all_labels,
@@ -630,50 +644,82 @@ def log_config(config):
     mlflow.log_params(log_config)
 
 def run(trial=None):
-    with mlflow.start_run(experiment_id=11, run_name=''):
+    with mlflow.start_run(experiment_id=18, run_name=''):
         config = load_config('./config.yaml')
         config['exp_path'] = get_exp_path(config)
         os.system(f'cp ./config.yaml ./{config["exp_path"]}/')
-        config['plt_path'] = os.path.join(config['exp_path'], config['plt_path'])
+        config['plt_path'] = os.path.join(config['exp_path'],
+                                          config['plt_path'])
 
         print(f'MLflow Run ID: {mlflow.active_run().info.run_id}')
 
         ### ------ Optuna ------ ###
         if trial is not None:
+            TRIED_CFGS = f'Discriminator-Conv-{config["dataset"]}-cfgs.pkl'
             config['lr_specific'] = trial.suggest_categorical(
                                                     'lr_specific',
-                                                    [1e-3, 1e-4, 1e-5, 1e-6]
+                                                    [1e-3, 1e-4, 1e-5]
                                                     )
             config['lr_classifier'] = trial.suggest_categorical(
                                                     'lr_classifier',
-                                                    [1e-3, 1e-4, 1e-5, 1e-6]
+                                                    [1e-3, 1e-4, 1e-5]
                                                     )
             config['lr_autoencoder'] = trial.suggest_categorical(
                                                     'lr_autoencoder',
-                                                    [1e-4, 1e-5, 1e-6]
+                                                    [1e-3, 1e-4, 1e-5]
                                                     )
-            config['epochs_classifier'] = trial.suggest_categorical(
-                                                    'epochs_classifier',
-                                                    [5, 10, 15, 20, 25, 30]
+            config['lr_discriminator'] = trial.suggest_categorical(
+                                                    'lr_discriminator',
+                                                    [1e-3, 1e-4, 1e-5]
                                                     )
-            config['epochs_cvae'] = trial.suggest_categorical(
-                                                    'epochs_cvae',
-                                                    [5, 10, 15, 20, 25, 30,
-                                                     35, 40, 45, 50, 75, 100]
-                                                    )
+            if config['decoupled_cvae_training'] is True:
+                config['epochs_classifier'] = trial.suggest_categorical(
+                                                'epochs_classifier',
+                                                [5, 10, 15, 20, 25, 30, 40, 50]
+                                                )
+                config['epochs_cvae'] = trial.suggest_categorical(
+                                                'epochs_cvae',
+                                                [5, 10, 15, 20, 25, 50, 75,
+                                                 100, 200]
+                                                )
+            else:
+                config['epochs'] = trial.suggest_categorical(
+                                                'epochs',
+                                                [5, 10, 15, 20, 25, 30, 40, 50]
+                                                )
+            if not os.path.exists(TRIED_CFGS):
+                with open(TRIED_CFGS, 'wb+') as f:
+                    pickle.dump([config], f, )
+            else:
+                with open(TRIED_CFGS, 'rb') as f:
+                    pkl = pickle.load(f)
+                if config in pkl:
+                    raise optuna.exceptions.TrialPruned()
+                pkl.append(config)
+                with open(TRIED_CFGS, 'wb+') as f:
+                    pickle.dump(pkl, f)
 
         log_config(config)
-        avg_acc, stdev_acc = main(config)
+        avg_acc, _ = main(config)
         mlflow.log_artifacts(config['exp_path'])
 
-    return avg_acc, stdev_acc
+        if trial is not None:
+            joblib.dump(study, STUDY_FILE)
+
+    return avg_acc
+
 
 if __name__ == '__main__':
-    if not os.path.exists('study.pkl'):
-        study = optuna.create_study(directions=['maximize', 'minimize'])
-    else:
-        study = joblib.load('study.pkl')
+    config = load_config('./config.yaml')
+    STUDY_FILE = f'DCGAN-Disc-{config["dataset"]}.pkl'
+    if config['optuna']:
+        if not os.path.exists(STUDY_FILE):
+            study = optuna.create_study(directions=['maximize'])
+        else:
+            study = joblib.load(STUDY_FILE)
 
-    study.optimize(run, timeout=3600*(9))
-    joblib.dump(study, 'study.pkl')
-    print("Number of finished trials: ", len(study.trials))
+        study.optimize(run, timeout=3600*(21))
+        joblib.dump(study, STUDY_FILE)
+        print("Number of finished trials: ", len(study.trials))
+    else:
+        run()

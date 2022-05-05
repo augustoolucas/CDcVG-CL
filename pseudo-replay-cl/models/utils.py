@@ -58,10 +58,30 @@ def load_classifier(n_classes, config):
     return classifier
 
 
-def train_cvae(config, encoder, decoder, data_loader, task_id=None):
+def load_discriminator(img_shape, config):
+    if config['arch_disc'] == 'MLP':
+        discriminator = models.mlp.Discriminator(img_shape=img_shape)
+    elif config['arch_disc'] == 'Conv':
+        discriminator = models.conv.Discriminator(img_shape=img_shape)
+
+    discriminator = discriminator.to(DEVICE)
+
+    return discriminator
+
+
+def train_cvae(config, encoder, decoder, data_loader, discriminator=None, task_id=None):
     scaler = amp.GradScaler(enabled=config['use_amp'])
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
                                       lr=float(config['lr_autoencoder']))
+    if discriminator is not None:
+        optimizer_discriminator = torch.optim.Adam(
+                                        discriminator.parameters(),
+                                        lr=float(config['lr_discriminator']),
+                                        #betas=(0.5, 0.999)
+                                        )
+        discriminator_loss = torch.nn.BCEWithLogitsLoss()
+        discriminator.train()
+        real_label, recon_label = 1, 0
 
     ### ------ Loss Functions ------ ###
     pixelwise_loss = torch.nn.MSELoss(reduction='sum')
@@ -73,8 +93,8 @@ def train_cvae(config, encoder, decoder, data_loader, task_id=None):
     train_bar = tqdm(range(config['epochs_cvae']))
 
     for epoch in train_bar:
-        encoder.train(); decoder.train();
-        epoch_rec_loss, epoch_kl_loss = 0, 0
+        encoder.train(); decoder.train()
+        epoch_rec_loss, epoch_kl_loss, epoch_disc_loss = 0, 0, 0
         for images, labels in data_loader:
             encoder.zero_grad(); decoder.zero_grad()
 
@@ -83,11 +103,42 @@ def train_cvae(config, encoder, decoder, data_loader, task_id=None):
 
             with amp.autocast(enabled=config['use_amp']):
                 latents, mu, var = encoder(images)
-                recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
+                # Train Discriminator with all-real batch
+                if discriminator is not None:
+                    discriminator.zero_grad()
+                    disc_output = discriminator(images).view(-1)
+                    disc_labels = torch.full((len(images),),
+                                             real_label,
+                                             dtype=torch.float,
+                                             device=DEVICE)
+                    lossD_real = discriminator_loss(disc_output, disc_labels)
+                    with amp.autocast(enabled=False):
+                        scaler.scale(lossD_real).backward()
+
+                recon_images = decoder(torch.cat([latents, labels_onehot],
+                                                 dim=1))
+
+                # Train Discriminator with all-recon batch
+                if discriminator is not None:
+                    disc_output = discriminator(recon_images.detach()).view(-1)
+                    disc_labels.fill_(recon_label)
+                    lossD_recon = discriminator_loss(disc_output, disc_labels)
+                    with amp.autocast(enabled=False):
+                        scaler.scale(lossD_recon).backward()
+                        scaler.step(optimizer_discriminator)
+
+                if discriminator is not None:
+                    decoder.zero_grad()
+                    disc_output = discriminator(recon_images).view(-1)
+                    disc_labels.fill_(real_label)
+                    lossG = discriminator_loss(disc_output, disc_labels)
 
                 kl_loss = kl_divergence_loss(var, mu)/len(images)
                 rec_loss = pixelwise_loss(recon_images, images)/len(images)
                 cvae_loss = rec_loss + kl_loss
+
+                if discriminator is not None:
+                    cvae_loss += lossG
 
             scaler.scale(cvae_loss).backward()
             scaler.step(optimizer_cvae)
@@ -96,13 +147,24 @@ def train_cvae(config, encoder, decoder, data_loader, task_id=None):
             epoch_rec_loss += rec_loss.item()
             epoch_kl_loss += kl_loss.item()
 
+            if discriminator is not None:
+                epoch_disc_loss += lossG.item()
+
         log_str = lambda s: s if task_id is None else f'{s} Task {task_id}'
         rec_loss_str = log_str('Loss Reconstruction')
         cvae_loss_str = log_str('Loss CVAE')
         kl_loss_str = log_str('Loss KL')
+        disc_loss_str = log_str('Loss Discriminator')
+
+        cvae_total_loss = epoch_rec_loss + epoch_kl_loss
+
+        if discriminator is not None:
+            cvae_total_loss += epoch_disc_loss
+
         mlflow.log_metrics({rec_loss_str: epoch_rec_loss/len(data_loader),
                             kl_loss_str: epoch_kl_loss/len(data_loader),
-                            cvae_loss_str: (epoch_rec_loss + epoch_kl_loss)/len(data_loader)},
+                            cvae_loss_str: (cvae_total_loss)/len(data_loader),
+                            disc_loss_str: epoch_disc_loss},
                            step=epoch)
 
 

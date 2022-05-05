@@ -43,3 +43,15 @@ class Classifier(nn.Module):
         x = self.classifier_layer(torch.cat([discriminative, invariant], dim=1))
         logits = self.output(x)
         return logits
+
+class Discriminator(nn.Module):
+    def __init__(self, img_shape):
+        super().__init__()
+        self.linear_block = nn.Sequential(nn.Linear(int(np.prod(img_shape)), 512),
+                                          nn.ReLU(inplace=True),
+                                          nn.Linear(512, 256),
+                                          nn.ReLU(inplace=True),
+                                          nn.Linear(256, 1))
+
+    def forward(self, img):
+        return self.linear_block(img.view(img.size(0), -1))
