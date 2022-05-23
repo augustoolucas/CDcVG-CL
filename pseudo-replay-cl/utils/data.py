@@ -133,8 +133,8 @@ def update_train_set(dataset, new_images, new_labels):
             exit()
 
     if dataset.data[0].shape != new_images[0].shape:
-        new_images = torch.swapaxes(new_images, 1, 2)#.reshape(shape)
-        new_images = torch.swapaxes(new_images, 2, 3)#.reshape(shape)
+        new_images = torch.swapaxes(new_images, 1, 2)
+        new_images = torch.swapaxes(new_images, 2, 3)
 
     if type(dataset.data) is np.ndarray:
         new_images = (new_images * 255).numpy().astype(dataset.data.dtype)
@@ -143,6 +143,7 @@ def update_train_set(dataset, new_images, new_labels):
             new_images = (new_images * 255).type(dataset.data.dtype)
         else:
             print('Warning: Mismatched data types.')
+            exit()
 
     if type(dataset.data) is np.ndarray:
         dataset.data = np.vstack([dataset.data, new_images])

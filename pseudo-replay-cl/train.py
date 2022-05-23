@@ -432,12 +432,12 @@ def main(config):
         val_loader = utils.data.get_dataloader(val_set, config['batch_size'])
 
         if config['decoupled_cvae_training']:
-            models.utils.train_cvae(config=config,
-                                    encoder=encoder,
-                                    decoder=decoder,
-                                    discriminator=discriminator,
-                                    data_loader=train_loader,
-                                    task_id=task)
+            models.utils.train_vaegan(config=config,
+                                      encoder=encoder,
+                                      decoder=decoder,
+                                      discriminator=discriminator,
+                                      data_loader=train_loader,
+                                      task_id=task)
 
             models.utils.train_classifier(config=config,
                                           encoder=encoder,
