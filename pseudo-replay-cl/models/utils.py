@@ -11,9 +11,9 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def load_specific_module(img_shape, config):
     if config['arch_specific'] == 'MLP':
-        specific = models.mlp.Specific(img_shape=img_shape, specific_size=20)
+        specific = models.mlp.Specific(img_shape=img_shape, specific_size=config['specific_size'])
     elif config['arch_specific'] == 'Conv':
-        specific = models.conv.Specific(img_shape=img_shape, specific_size=20)
+        specific = models.conv.Specific(img_shape=img_shape, specific_size=config['specific_size'])
 
     specific = specific.to(DEVICE)
 
@@ -48,7 +48,7 @@ def load_decoder(img_shape, n_classes, config):
 
 def load_classifier(n_classes, config):
     classifier = models.mlp.Classifier(invariant_size=config['latent_size'],
-                                       specific_size=20,
+                                       specific_size=config['specific_size'],
                                        classification_n_hidden=40,
                                        n_classes=n_classes,
                                        softmax=config['softmax'])

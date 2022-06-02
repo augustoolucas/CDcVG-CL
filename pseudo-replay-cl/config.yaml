@@ -7,6 +7,7 @@ n_replay: 5000 # per class
 epochs: 2 # used only if decoupled_cvae_training is false
 epochs_cvae: 50
 epochs_classifier: 5
+specific_size: 20
 batch_size: 128
 dataset: 'MNIST'
 balanced: false
