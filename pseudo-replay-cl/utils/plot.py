@@ -89,7 +89,7 @@ def multi_plots(data1, data2, xlabel, ylabel1, ylabel2, title, fname):
 def visualize_train_data(data_loader, labels, fname):
     n_imgs = 64
     class_imgs = {}
-    for imgs, imgs_labels in data_loader:
+    for imgs, imgs_labels, _ in data_loader:
         for label in labels:
             if label not in class_imgs:
                 class_imgs[label] = imgs[imgs_labels == label]

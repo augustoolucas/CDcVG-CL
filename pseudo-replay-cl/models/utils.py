@@ -1,4 +1,5 @@
 import utils
+import copy
 import torch
 import models
 import mlflow
@@ -122,7 +123,7 @@ def train_vae(config, encoder, decoder, train_loader, val_loader=None, task_id=N
                            step=epoch)
 
 
-def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discriminator=None, task_id=None):
+def train_vaegan(config, encoder, decoder, train_loader, val_loader, discriminator, task_id=None):
     scaler = amp.GradScaler(enabled=config['use_amp'])
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) + list(decoder.parameters()),
                                       lr=float(config['lr_autoencoder']))
@@ -136,6 +137,7 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discri
         discriminator.train()
         real_label, recon_label = 1, 0
 
+    best_valid_loss = 1e12
     ### ------ Loss Functions ------ ###
     pixelwise_loss = torch.nn.MSELoss(reduction='sum')
     kl_divergence_loss = lambda var, mu: 0.5 * torch.sum(torch.exp(var) + mu**2 - 1 - var)
@@ -148,7 +150,7 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discri
     for epoch in train_bar:
         encoder.train(); decoder.train()
         epoch_rec_loss, epoch_kl_loss, epoch_disc_loss = 0, 0, 0
-        for images, labels in train_loader:
+        for images, labels, _ in train_loader:
             encoder.zero_grad(); decoder.zero_grad()
 
             labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
@@ -203,11 +205,55 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discri
             if discriminator is not None:
                 epoch_disc_loss += lossG.item()
 
+
+        encoder.eval(); decoder.eval();
+        encoder.zero_grad(); decoder.zero_grad();
+        valid_loss = 0
+
+        if discriminator is not None:
+            discriminator.eval(); discriminator.zero_grad()
+
+        with torch.inference_mode():
+            for imgs, labels, _ in val_loader:
+                labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
+                imgs = imgs.to(DEVICE)
+
+                with amp.autocast(enabled=config['use_amp']):
+                    latents, mu, var = encoder(imgs)
+
+                    if discriminator is not None:
+                        disc_output = discriminator(imgs).view(-1)
+                        real_labels = torch.ones(imgs.size(0)).type_as(imgs)
+                        real_loss = discriminator_loss(disc_output, real_labels)
+
+                        fake_labels = torch.zeros(imgs.size(0)).type_as(imgs)
+
+                    recon_imgs = decoder(torch.cat([latents, labels_onehot],
+                                                   dim=1))
+                    if discriminator is not None:
+                        disc_output = discriminator(recon_imgs).view(-1)
+                        fake_loss = discriminator_loss(disc_output.detach(), fake_labels)
+
+                    kl_loss = kl_divergence_loss(var, mu)/len(imgs)
+                    rec_loss = pixelwise_loss(recon_imgs, imgs)/len(imgs)
+
+                if discriminator is not None:
+                    real_loss = scaler.scale(real_loss)
+                    fake_loss = scaler.scale(fake_loss)
+                kl_loss = scaler.scale(kl_loss)
+                rec_loss = scaler.scale(rec_loss)
+
+                cvae_loss = rec_loss + kl_loss
+                if discriminator is not None:
+                    cvae_loss += real_loss + fake_loss
+                valid_loss += cvae_loss.item()
+
         log_str = lambda s: s if task_id is None else f'{s} Task {task_id}'
         rec_loss_str = log_str('Loss Reconstruction')
         cvae_loss_str = log_str('Loss CVAE')
         kl_loss_str = log_str('Loss KL')
         disc_loss_str = log_str('Loss Discriminator')
+        valid_loss_str = log_str('VAEGAN Validation Loss')
 
         cvae_total_loss = epoch_rec_loss + epoch_kl_loss
 
@@ -217,11 +263,27 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discri
         mlflow.log_metrics({rec_loss_str: epoch_rec_loss/len(train_loader),
                             kl_loss_str: epoch_kl_loss/len(train_loader),
                             cvae_loss_str: (cvae_total_loss)/len(train_loader),
-                            disc_loss_str: epoch_disc_loss},
+                            disc_loss_str: epoch_disc_loss,
+                            valid_loss_str: valid_loss},
                            step=epoch)
+        
+        if valid_loss < best_valid_loss:
+            early_stop_count = 15
+            best_valid_loss = valid_loss
+            best_encoder = copy.deepcopy(encoder)
+            best_decoder = copy.deepcopy(decoder)
+            best_discriminator = copy.deepcopy(discriminator)
+        else:
+            early_stop_count -= 1
+
+        if early_stop_count == 0:
+            encoder = best_encoder
+            decoder = best_decoder
+            discriminator = best_discriminator
+            break
 
 
-def train_classifier(config, encoder, specific, classifier, data_loader, task_id=None):
+def train_classifier(config, encoder, specific, classifier, train_loader, val_loader, task_id=None):
     scaler = amp.GradScaler(enabled=config['use_amp'])
     encoder.eval(); specific.train(); classifier.train()
     optimizer_specific = torch.optim.Adam(specific.parameters(),
@@ -237,11 +299,12 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
                        'loss_fn_classification': 'CrossEntropyLoss'})
 
     train_bar = tqdm(range(config['epochs_classifier']))
+    best_valid_loss = 1e12
 
     for epoch in train_bar:
         epoch_classifier_loss, epoch_acc = 0, 0
-        classifier.train()
-        for batch_idx, (images, labels) in enumerate(data_loader, start=1):
+        specific.train(); classifier.train()
+        for batch_idx, (images, labels, _) in enumerate(train_loader, start=1):
             specific.zero_grad(); classifier.zero_grad()
 
             images, labels = images.to(DEVICE), labels.to(DEVICE)
@@ -263,25 +326,38 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
             epoch_acc += accuracy_score(output_list, labels.detach().cpu().numpy())
             epoch_classifier_loss += classifier_loss.item()
 
+        specific.eval(); classifier.eval()
+        valid_loss = 0
+        for imgs, labels, _ in val_loader:
+            imgs, labels = imgs.to(DEVICE), labels.to(DEVICE)
+
+            with amp.autocast(enabled=config['use_amp']):
+                with torch.inference_mode():
+                    latents, _, _ = encoder(imgs)
+                    specific_embedding = specific(imgs)
+
+                classifier_output = classifier(specific_embedding, latents.detach())
+                classifier_loss = classification_loss(classifier_output, labels)/len(imgs)
+            classifier_loss = scaler.scale(classifier_loss)
+            valid_loss += classifier_loss.item()
+
+
         cls_loss_str = 'Loss Classifier' if task_id is None else f'Loss Classifier Task {task_id}' 
-        mlflow.log_metrics({cls_loss_str: epoch_classifier_loss/len(data_loader)},
+        cls_valid_loss_str = 'Classifier Validation Loss'
+        mlflow.log_metrics({cls_loss_str: epoch_classifier_loss/len(train_loader),
+                            cls_valid_loss_str: valid_loss},
                            step=epoch)
 
-        for _ in range(0):
-            classifier.eval()
-            for batch_idx, (images, labels) in enumerate(data_loader, start=1):
-                specific.zero_grad(); classifier.zero_grad()
+        if valid_loss < best_valid_loss:
+            early_stop_count = 10
+            best_valid_loss = valid_loss
+            best_classifier = copy.deepcopy(classifier)
+        else:
+            early_stop_count -= 1
 
-                images, labels = images.to(DEVICE), labels.to(DEVICE)
-
-                with torch.no_grad():
-                    latents, _, _ = encoder(images)
-
-                specific_embed = specific(images)
-                classifier_output = classifier(specific_embed, latents.detach())
-                classifier_loss = classification_loss(classifier_output, labels)
-                classifier_loss.backward()
-                optimizer_specific.step()
+        if early_stop_count == 0:
+            classifier = best_classifier
+            break
 
 
 def test(encoder, specific, classifier, data_loader, use_amp=False, fname=None):
@@ -291,7 +367,7 @@ def test(encoder, specific, classifier, data_loader, use_amp=False, fname=None):
         batch_acc = 0
         all_outputs = []
         all_labels = []
-        for images, labels in data_loader:
+        for images, labels, _ in data_loader:
             images = images.to(DEVICE)
             with amp.autocast(enabled=use_amp):
                 latents, _, _ = encoder(images)

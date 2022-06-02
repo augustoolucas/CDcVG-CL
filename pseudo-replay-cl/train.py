@@ -16,19 +16,22 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
 from torch.cuda import amp
-from sklearnex import patch_sklearn
-patch_sklearn()
+#from sklearnex import patch_sklearn
+#patch_sklearn()
 from sklearn.manifold import TSNE
 from models.utils import DEVICE
 from collections import defaultdict
 from matplotlib.ticker import MaxNLocator
 from sklearn.neighbors import KNeighborsClassifier as KNN
+from torch.utils.data import ConcatDataset, TensorDataset, random_split
 from sklearn.metrics import accuracy_score, precision_score, confusion_matrix, ConfusionMatrixDisplay
+from avalanche.benchmarks.utils.data_loader import ReplayDataLoader
+from avalanche.benchmarks.utils.avalanche_dataset import AvalancheDataset
+from avalanche.benchmarks.utils import AvalancheTensorDataset
 
 def gen_pseudo_samples(n_samples, labels, decoder, n_classes, latent_dim, use_amp=False):
     decoder.eval()
 
-    labels = [label for labels in labels for label in labels]
     for label in labels:
         y = torch.ones(size=[n_samples], dtype=torch.int64) * label
         new_labels = y if label == labels[0] else torch.cat((new_labels, y))
@@ -58,7 +61,7 @@ def gen_recon_images(encoder, decoder, data_loader, use_amp=False):
 
     ### Generate reconstructed images ###
     with torch.no_grad():
-        images, labels = next(iter(data_loader))
+        images, labels, _ = next(iter(data_loader))
         labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
         images = images.to(DEVICE)
         with amp.autocast(enabled=use_amp):
@@ -70,12 +73,12 @@ def gen_recon_images(encoder, decoder, data_loader, use_amp=False):
     return images, recon_images
 
 
-def get_features(encoder, specific, imgs, use_amp=False):
+def get_features(encoder, specific, imgs, latent_size, specific_size, use_amp=False):
     encoder.eval(); specific.eval()
 
-    all_z = torch.empty(size=(0, 32))
-    all_specific = torch.empty(size=(0, 20))
-    all_combined = torch.empty(size=(0, 52))
+    all_z = torch.empty(size=(0, latent_size))
+    all_specific = torch.empty(size=(0, specific_size))
+    all_combined = torch.empty(size=(0, latent_size + specific_size))
     with torch.no_grad():
         for img in imgs:
             with amp.autocast(enabled=use_amp):
@@ -124,7 +127,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
     if not Path(task_plt_path).is_dir():
         os.mkdir(task_plt_path)
 
-    utils.plot.visualize_train_data(train_loader, [label for task in tasks_labels for label in task], f'{task_plt_path}/train_imgs.png')
+    utils.plot.visualize_train_data(train_loader, tasks_labels, f'{task_plt_path}/train_imgs.png')
 
     train_bar = tqdm(range(config['epochs']))
 
@@ -134,7 +137,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
         epoch_classifier_loss, epoch_rec_loss, epoch_kl_loss = 0, 0, 0
         epoch_acc = 0
         classes_count = defaultdict(int)
-        for batch_idx, (images, labels) in enumerate(train_loader, start=1):
+        for batch_idx, (images, labels, _) in enumerate(train_loader, start=1):
             for cls in set(labels.tolist()):
                 classes_count[cls] += len(labels[labels == cls])
             ### ------ Training autoencoder ------ ###
@@ -379,14 +382,15 @@ def main(config):
     np.random.seed(1)
 
     ## ------ Load Data ------ ###
-    train_tasks = utils.data.load_tasks(config['dataset'], config['balanced'], train=True)
-    test_tasks = utils.data.load_tasks(config['dataset'], config['balanced'], train=False)
+    n_tasks = 5
+    dataset = utils.data.load_data(config['dataset'], n_tasks)
 
-    img_shape = utils.data.get_img_shape(train_tasks)
-    classes = utils.data.get_classes(train_tasks)
-    labels = utils.data.get_labels(train_tasks)
-    n_tasks = len(train_tasks)
-    n_classes = len(classes)
+    n_classes = dataset.n_classes
+    #labels = utils.data.get_labels(dataset)
+    labels = list(range(n_classes))
+    #img_shape = utils.data.get_img_shape(dataset)
+    img_shape = dataset.train_stream[0].dataset[0][0].shape
+    #img_shape = (32, 32, 1)
 
     ### ------ Loading Models ------ ###
     specific = models.utils.load_specific_module(img_shape, config)
@@ -402,33 +406,38 @@ def main(config):
 
     acc_of_task_t_at_time_t = []
     train_sets_tasks = []
-    for task in range(n_tasks):
-        print(f'Training Task {task}')
+    data_splits = zip(dataset.train_stream, dataset.test_stream, dataset.valid_stream)
+    for task_label, (train_exp, test_exp, val_exp) in enumerate(data_splits):
+        print(f'Training Task {task_label}')
 
-        task_plt_path = f'{config["plt_path"]}/Task_{task}'
+        task_plt_path = f'{config["plt_path"]}/Task_{task_label}'
         if not Path(task_plt_path).is_dir():
             os.mkdir(task_plt_path)
 
-        train_set = copy.copy(train_tasks[task])
+        train_set = train_exp.dataset
+        val_set = val_exp.dataset
 
-        if task > 0:
+        if task_label > 0:
+            classes_to_gen = list(set(train_exp.classes_seen_so_far) - set(train_exp.classes_in_this_experience))
             gen_images, gen_labels = gen_pseudo_samples(
-                                                n_samples=config['n_replay'],
-                                                labels=labels[:task],
-                                                decoder=decoder,
-                                                n_classes=n_classes,
-                                                latent_dim=config['latent_size']
-                                                )
+                                        n_samples=config['n_replay'],
+                                        labels=classes_to_gen,
+                                        decoder=decoder,
+                                        n_classes=n_classes,
+                                        latent_dim=config['latent_size']
+                                        )
 
-            train_set = utils.data.update_train_set(train_set,
-                                                    gen_images,
-                                                    gen_labels)
-        train_sets_tasks.append(train_set)
+            replay_set = AvalancheTensorDataset(gen_images, gen_labels.tolist())
+            replay_train_set, replay_val_set = random_split(replay_set,
+                                                            [len(replay_set) - len(val_set) * task_label,
+                                                             len(val_set) * task_label])
+            train_set = ConcatDataset([train_set, replay_train_set])
+            val_set = ConcatDataset([val_set, replay_val_set])
 
         train_loader = utils.data.get_dataloader(train_set,
                                                  config['batch_size'])
+        train_sets_tasks.append(train_set)
 
-        val_set = copy.copy(test_tasks[:task + 1])
         val_loader = utils.data.get_dataloader(val_set, config['batch_size'])
 
         if config['decoupled_cvae_training']:
@@ -436,15 +445,17 @@ def main(config):
                                       encoder=encoder,
                                       decoder=decoder,
                                       discriminator=discriminator,
-                                      data_loader=train_loader,
-                                      task_id=task)
+                                      train_loader=train_loader,
+                                      val_loader=val_loader,
+                                      task_id=task_label)
 
             models.utils.train_classifier(config=config,
                                           encoder=encoder,
                                           specific=specific,
                                           classifier=classifier,
-                                          data_loader=train_loader,
-                                          task_id=task)
+                                          train_loader=train_loader,
+                                          val_loader=val_loader,
+                                          task_id=task_label)
 
         else:
             train_task(config=config,
@@ -454,15 +465,15 @@ def main(config):
                        classifier=classifier,
                        discriminator=discriminator,
                        train_loader=train_loader,
-                       tasks_labels=labels[:task+1],
-                       task_id=task)
+                       tasks_labels=train_exp.classes_in_this_experience,
+                       task_id=task_label)
 
         models.utils.test(encoder=encoder,
              specific=specific,
              classifier=classifier,
              data_loader=val_loader,
              use_amp=config['use_amp'],
-             fname=f'{task_plt_path}/test_set.png')
+             fname=f'{task_plt_path}/val_set.png')
 
         models.utils.test(encoder=encoder,
              specific=specific,
@@ -471,7 +482,7 @@ def main(config):
              use_amp=config['use_amp'],
              fname=f'{task_plt_path}/train_set.png')
 
-        test_set = copy.copy(test_tasks[task])
+        test_set = test_exp.dataset
         test_loader = utils.data.get_dataloader(test_set, batch_size=128)
         acc = models.utils.test(encoder=encoder,
                    specific=specific,
@@ -480,13 +491,13 @@ def main(config):
                    use_amp=config['use_amp'])
 
         acc_of_task_t_at_time_t.append(acc)
-        mlflow.log_metric(f'training_acc_task', acc, step=task)
+        mlflow.log_metric(f'training_acc_task', acc, step=task_label)
 
         real_images, recon_images = gen_recon_images(encoder,
                                                      decoder,
-                                                     val_loader)
+                                                     test_loader)
         gen_images, _ = gen_pseudo_samples(n_samples=128,
-                                           labels=labels[:task+1],
+                                           labels=test_exp.classes_in_this_experience,
                                            decoder=decoder,
                                            n_classes=n_classes,
                                            latent_dim=config['latent_size'])
@@ -499,7 +510,7 @@ def main(config):
     ACCs_test_set = []
     BWTs_test_set = []
 
-    test_set = test_tasks
+    test_set = ConcatDataset([exp.dataset for exp in dataset.test_stream])
     test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
     acc_train = models.utils.test(
                                 encoder,
@@ -510,8 +521,8 @@ def main(config):
                                 fname=f'{config["plt_path"]}/test_test_set.png'
                                 )
 
-    for task in range(n_tasks):
-        test_set = copy.copy(test_tasks[task])
+    for task, test_exp in enumerate(dataset.test_stream):
+        test_set = copy.copy(test_exp.dataset)
         test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
         acc_test = models.utils.test(encoder,
                                      specific,
@@ -564,8 +575,8 @@ def main(config):
             print(f'Average Test Set Backward Transfer: {avg_bwt_test_set*100:.02f}%\n',
                   file=file)
 
-    test_loader = utils.data.get_dataloader(test_tasks, batch_size=1000)
-    train_loader = utils.data.get_dataloader(train_tasks, config['batch_size'])
+    test_loader = utils.data.get_dataloader(dataset.original_test_dataset, batch_size=1000)
+    train_loader = utils.data.get_dataloader(dataset.original_train_dataset, config['batch_size'])
     if config['plot_tsne']:
         knn_ = knn(encoder, specific, train_loader)
         sne(config['exp_path'],
@@ -595,30 +606,32 @@ def main(config):
     if config['save_images']:
         img_path = f'{config["exp_path"]}/real_images'
         os.makedirs(img_path)
-        for task in range(n_tasks):
-            utils.plot.save_images(train_tasks[task].data,
-                                   train_tasks[task].targets,
+        for train_exp in dataset.train_stream:
+            utils.plot.save_images(train_exp.dataset.data,
+                                   train_exp.dataset.targets,
                                    img_path)
 
         img_path = f'{config["exp_path"]}/generated_images'
         os.makedirs(img_path)
 
-    for task in range(n_tasks):
-        all_z = torch.empty(size=(0, 32))
-        all_specific = torch.empty(size=(0, 20))
-        all_combined = torch.empty(size=(0, 52))
+    for task, test_exp in enumerate(dataset.test_stream):
+        all_z = torch.empty(size=(0, config['latent_size']))
+        all_specific = torch.empty(size=(0, config['specific_size']))
+        all_combined = torch.empty(size=(0, config['latent_size'] + config['specific_size']))
         all_labels = []
         z, specif, combined = get_features(
                                         encoder,
                                         specific,
-                                        [img for img, _ in test_tasks[task]],
-                                        config['use_amp']
+                                        [img for img, _, _ in test_exp.dataset],
+                                        use_amp=config['use_amp'],
+                                        latent_size=config['latent_size'],
+                                        specific_size=config['specific_size'],
                                         )
 
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
         all_combined = torch.cat((all_combined, combined))
-        all_labels.extend(test_tasks[task].targets.tolist())
+        all_labels.extend(test_exp.dataset.targets)
 
         gen_images, gen_labels = gen_pseudo_samples(
                                             n_samples=1024,
@@ -632,7 +645,10 @@ def main(config):
         z, specif, combined = get_features(encoder,
                                            specific,
                                            gen_images,
-                                           config['use_amp'])
+                                           use_amp=config['use_amp'],
+                                           latent_size=config['latent_size'],
+                                           specific_size=config['specific_size'],
+                                           )
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
         all_combined = torch.cat((all_combined, combined))
@@ -688,7 +704,7 @@ def log_config(config):
     mlflow.log_params(log_config)
 
 def run(trial=None):
-    with mlflow.start_run(experiment_id=18, run_name=''):
+    with mlflow.start_run(experiment_id=22, run_name=''):
         config = load_config('./config.yaml')
         config['exp_path'] = get_exp_path(config)
         os.system(f'cp ./config.yaml ./{config["exp_path"]}/')
@@ -762,7 +778,7 @@ if __name__ == '__main__':
         else:
             study = joblib.load(STUDY_FILE)
 
-        study.optimize(run, timeout=3600*(21))
+        study.optimize(run, timeout=3600*(8))
         joblib.dump(study, STUDY_FILE)
         print("Number of finished trials: ", len(study.trials))
     else:

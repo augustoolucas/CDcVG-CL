@@ -1,4 +1,6 @@
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
+from avalanche.benchmarks import SplitMNIST, SplitCIFAR10, SplitFMNIST
+from avalanche.benchmarks.generators import benchmark_with_validation_stream
 from torchvision import datasets, transforms
 import numpy as np
 import torch
@@ -11,27 +13,49 @@ def onehot_encoder(labels, n_classes):
 
     return labels_onehot
 
-def load_data(dataset, train=True):
+def load_data(dataset, n_tasks):
     if dataset == 'MNIST':
-        data = datasets.MNIST(root='./Datasets',
-                              download=True,
-                              train=train,
-                              transform=transforms.ToTensor())
+        data = SplitMNIST(n_experiences=n_tasks,
+                          dataset_root='./Datasets',
+                          return_task_id=False,
+                          shuffle=False,
+                          train_transform=transforms.ToTensor(),
+                          eval_transform=transforms.ToTensor(),
+                          seed=1)
     elif dataset == 'CIFAR10':
-        data = datasets.CIFAR10(root='./Datasets',
-                                download=True,
-                                train=train,
-                                transform=transforms.ToTensor())
-
+        transfs = transforms.Compose([transforms.ToTensor(),
+                                      transforms.Grayscale(1)])
+        transfs = transforms.ToTensor()
+        data = SplitCIFAR10(n_experiences=n_tasks,
+                            dataset_root='./Datasets',
+                            return_task_id=False,
+                            shuffle=False,
+                            train_transform=transfs,
+                            eval_transform=transfs)
+    elif dataset == 'CIFAR10-Gray':
+        transfs = transforms.Compose([transforms.ToTensor(),
+                                      transforms.Grayscale(1)])
+        data = SplitCIFAR10(n_experiences=n_tasks,
+                            dataset_root='./Datasets',
+                            return_task_id=False,
+                            shuffle=False,
+                            train_transform=transfs,
+                            eval_transform=transfs)
     elif dataset == 'FashionMNIST':
-        data = datasets.FashionMNIST(root='./Datasets',
-                                     download=True,
-                                     train=train,
-                                     transform=transforms.ToTensor())
+        data = SplitFMNIST(n_experiences=n_tasks,
+                           dataset_root='./Datasets',
+                           return_task_id=False,
+                           shuffle=False,
+                           train_transform=transforms.ToTensor(),
+                           eval_transform=transforms.ToTensor())
     else:
         print('Invalid dataset.')
         exit()
 
+    n_classes = data.n_classes
+    data = benchmark_with_validation_stream(benchmark_instance=data,
+                                            validation_size=0.05)
+    data.n_classes = n_classes
     return data
 
 
@@ -83,36 +107,6 @@ def get_classes(tasks):
 
 
 def get_dataloader(dataset, batch_size):
-    data_ndarray = False
-    targets_list = False
-    if type(dataset) == list:
-        if type(dataset[0].data) is np.ndarray:
-            data_ndarray = True
-            data = None
-        else:
-            data = torch.tensor([], dtype=dataset[0].data.dtype)
-
-        if type(dataset[0].targets) is list:
-            targets_list = True
-            targets= []
-        else:
-            targets = torch.tensor([])
-
-        for ds in dataset:
-            if data_ndarray:
-                data = np.vstack([data, ds.data]) if data is not None else ds.data
-            else:
-                data = torch.cat([data, ds.data])
-
-            if targets_list:
-                targets = targets + ds.targets
-            else:
-                targets = torch.cat([targets, ds.targets])
-
-        dataset = copy.deepcopy(dataset[0])
-        dataset.data = data
-        dataset.targets = targets
-
     loader = DataLoader(dataset,
                         batch_size,
                         num_workers=4,
