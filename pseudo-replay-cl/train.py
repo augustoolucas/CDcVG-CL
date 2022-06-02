@@ -63,7 +63,7 @@ def gen_pseudo_samples(n_samples,
             new_images = torch.cat([new_images, gen_images])
         torch.cuda.empty_cache()
 
-    return new_images, new_labels
+    return new_images, new_labels.tolist()
 
 
 def gen_recon_images(encoder, decoder, data_loader, use_amp=False):
@@ -460,7 +460,7 @@ def save_model(model, path, name):
     torch.save(model.state_dict(), f'{path}/{name}.pt')
 
 
-def main(config):
+def main(cfg):
     ## ------ Reproducibility ------ ##
     torch.manual_seed(1)
     torch.cuda.manual_seed(1)
@@ -472,25 +472,22 @@ def main(config):
 
     ## ------ Load Data ------ ###
     n_tasks = 5
-    dataset = utils.data.load_data(config['dataset'], n_tasks)
+    dataset = utils.data.load_data(cfg['dataset'], n_tasks)
 
     n_classes = dataset.n_classes
-    #labels = utils.data.get_labels(dataset)
-    labels = list(range(n_classes))
-    #img_shape = utils.data.get_img_shape(dataset)
+    labels = dataset.classes_order
     img_shape = dataset.train_stream[0].dataset[0][0].shape
-    #img_shape = (32, 32, 1)
 
     ### ------ Loading Models ------ ###
-    specific = models.utils.load_specific_module(img_shape, config)
-    encoder = models.utils.load_encoder(img_shape, config)
-    decoder = models.utils.load_decoder(img_shape, n_classes, config)
-    classifier = models.utils.load_classifier(n_classes, config)
+    specific = models.utils.load_specific_module(img_shape, cfg)
+    encoder = models.utils.load_encoder(img_shape, cfg)
+    decoder = models.utils.load_decoder(img_shape, n_classes, cfg)
+    classifier = models.utils.load_classifier(n_classes, cfg)
 
     discriminator = None
 
-    if config['use_discriminator']:
-        discriminator = models.utils.load_discriminator(img_shape, config)
+    if cfg['use_discriminator']:
+        discriminator = models.utils.load_discriminator(img_shape, cfg)
 
     ### ------ Train the sequence of tasks ------ ###
 
@@ -502,7 +499,7 @@ def main(config):
     for task_label, (train_exp, test_exp, val_exp) in enumerate(data_splits):
         print(f'Training Task {task_label}')
 
-        task_plt_path = f'{config["plt_path"]}/Task_{task_label}'
+        task_plt_path = f'{cfg["plt_path"]}/Task_{task_label}'
 
         if not Path(task_plt_path).is_dir():
             os.mkdir(task_plt_path)
@@ -515,14 +512,13 @@ def main(config):
                 set(train_exp.classes_seen_so_far) -
                 set(train_exp.classes_in_this_experience))
             gen_images, gen_labels = gen_pseudo_samples(
-                n_samples=config['n_replay'],
+                n_samples=cfg['n_replay'],
                 labels=classes_to_gen,
                 decoder=decoder,
                 n_classes=n_classes,
-                latent_dim=config['latent_size'])
+                latent_dim=cfg['latent_size'])
 
-            replay_set = AvalancheTensorDataset(gen_images,
-                                                gen_labels.tolist())
+            replay_set = AvalancheTensorDataset(gen_images, gen_labels)
             replay_train_set, replay_val_set = random_split(
                 replay_set, [
                     len(replay_set) - len(val_set) * task_label,
@@ -532,13 +528,13 @@ def main(config):
             val_set = ConcatDataset([val_set, replay_val_set])
 
         train_loader = utils.data.get_dataloader(train_set,
-                                                 config['batch_size'])
+                                                 cfg['batch_size'])
         train_sets_tasks.append(train_set)
 
-        val_loader = utils.data.get_dataloader(val_set, config['batch_size'])
+        val_loader = utils.data.get_dataloader(val_set, cfg['batch_size'])
 
-        if config['decoupled_cvae_training']:
-            models.utils.train_vaegan(config=config,
+        if cfg['decoupled_cvae_training']:
+            models.utils.train_vaegan(config=cfg,
                                       encoder=encoder,
                                       decoder=decoder,
                                       discriminator=discriminator,
@@ -546,7 +542,7 @@ def main(config):
                                       val_loader=val_loader,
                                       task_id=task_label)
 
-            models.utils.train_classifier(config=config,
+            models.utils.train_classifier(config=cfg,
                                           encoder=encoder,
                                           specific=specific,
                                           classifier=classifier,
@@ -555,7 +551,7 @@ def main(config):
                                           task_id=task_label)
 
         else:
-            train_task(config=config,
+            train_task(config=cfg,
                        encoder=encoder,
                        decoder=decoder,
                        specific=specific,
@@ -569,14 +565,14 @@ def main(config):
                           specific=specific,
                           classifier=classifier,
                           data_loader=val_loader,
-                          use_amp=config['use_amp'],
+                          use_amp=cfg['use_amp'],
                           fname=f'{task_plt_path}/val_set.png')
 
         models.utils.test(encoder=encoder,
                           specific=specific,
                           classifier=classifier,
                           data_loader=train_loader,
-                          use_amp=config['use_amp'],
+                          use_amp=cfg['use_amp'],
                           fname=f'{task_plt_path}/train_set.png')
 
         test_set = test_exp.dataset
@@ -585,7 +581,7 @@ def main(config):
                                 specific=specific,
                                 classifier=classifier,
                                 data_loader=test_loader,
-                                use_amp=config['use_amp'])
+                                use_amp=cfg['use_amp'])
 
         acc_of_task_t_at_time_t.append(acc)
         mlflow.log_metric(f'training_acc_task', acc, step=task_label)
@@ -597,7 +593,7 @@ def main(config):
             labels=test_exp.classes_in_this_experience,
             decoder=decoder,
             n_classes=n_classes,
-            latent_dim=config['latent_size'])
+            latent_dim=cfg['latent_size'])
         utils.plot.visualize(real_images, recon_images, gen_images,
                              f'{task_plt_path}/images.png')
 
@@ -612,8 +608,8 @@ def main(config):
         specific,
         classifier,
         test_loader,
-        use_amp=config['use_amp'],
-        fname=f'{config["plt_path"]}/test_test_set.png')
+        use_amp=cfg['use_amp'],
+        fname=f'{cfg["plt_path"]}/test_test_set.png')
 
     for task, test_exp in enumerate(dataset.test_stream):
         test_set = copy.copy(test_exp.dataset)
@@ -622,7 +618,7 @@ def main(config):
                                      specific,
                                      classifier,
                                      test_loader,
-                                     use_amp=config['use_amp'])
+                                     use_amp=cfg['use_amp'])
         bwt_test = acc_test - acc_of_task_t_at_time_t[task]
 
         train_loader = utils.data.get_dataloader(train_sets_tasks[task],
@@ -632,8 +628,8 @@ def main(config):
             specific,
             classifier,
             train_loader,
-            use_amp=config['use_amp'],
-            fname=f'{config["plt_path"]}/test_train_set_task_{task}.png')
+            use_amp=cfg['use_amp'],
+            fname=f'{cfg["plt_path"]}/test_train_set_task_{task}.png')
 
         mlflow.log_metrics(
             {
@@ -650,7 +646,7 @@ def main(config):
                            xlabel='Task',
                            ylabel='Accuracy',
                            title='Test Accuracy',
-                           fname=f'{config["plt_path"]}/tasks-acc.png')
+                           fname=f'{cfg["plt_path"]}/tasks-acc.png')
 
     avg_acc_test_set = np.average(ACCs_test_set)
     stdev_acc_test_set = np.std(ACCs_test_set)
@@ -661,7 +657,7 @@ def main(config):
         'Average BWT': avg_bwt_test_set
     })
 
-    with open(config['exp_path'] + '/output.log', 'w+') as f:
+    with open(cfg['exp_path'] + '/output.log', 'w+') as f:
         for file in [None, f]:
             print('', file=None)
 
@@ -680,47 +676,47 @@ def main(config):
     test_loader = utils.data.get_dataloader(dataset.original_test_dataset,
                                             batch_size=1000)
     train_loader = utils.data.get_dataloader(dataset.original_train_dataset,
-                                             config['batch_size'])
+                                             cfg['batch_size'])
 
-    if config['plot_tsne']:
+    if cfg['plot_tsne']:
         knn_ = knn(encoder, specific, train_loader)
-        sne(config['exp_path'], encoder, specific, classifier, knn_,
+        sne(cfg['exp_path'], encoder, specific, classifier, knn_,
             test_loader, 'test')
-        sne(config['exp_path'], encoder, specific, classifier, knn_,
+        sne(cfg['exp_path'], encoder, specific, classifier, knn_,
             train_loader, 'train')
     """
-    cls = train_mlp(config, encoder, specific, classifier, train_loader)
+    cls = train_mlp(cfg, encoder, specific, classifier, train_loader)
     acc = test(encoder, specific, cls, test_loader)
 
-    with open(f'{config["exp_path"]}/output.log', 'a') as f:
+    with open(f'{cfg["exp_path"]}/output.log', 'a') as f:
         print(f'MLP Classifier Accuracy: {(acc*100):.02f}%', file=f)
     print(f'MLP Classifier Accuracy: {(acc*100):.02f}%')
     """
 
-    if config['save_images']:
-        img_path = f'{config["exp_path"]}/real_images'
+    if cfg['save_images']:
+        img_path = f'{cfg["exp_path"]}/real_images'
         os.makedirs(img_path)
 
         for train_exp in dataset.train_stream:
             utils.plot.save_images(train_exp.dataset.data,
                                    train_exp.dataset.targets, img_path)
 
-        img_path = f'{config["exp_path"]}/generated_images'
+        img_path = f'{cfg["exp_path"]}/generated_images'
         os.makedirs(img_path)
 
     for task, test_exp in enumerate(dataset.test_stream):
-        all_z = torch.empty(size=(0, config['latent_size']))
-        all_specific = torch.empty(size=(0, config['specific_size']))
-        all_combined = torch.empty(size=(0, config['latent_size'] +
-                                         config['specific_size']))
+        all_z = torch.empty(size=(0, cfg['latent_size']))
+        all_specific = torch.empty(size=(0, cfg['specific_size']))
+        all_combined = torch.empty(size=(0, cfg['latent_size'] +
+                                         cfg['specific_size']))
         all_labels = []
         z, specif, combined = get_features(
             encoder,
             specific,
             [img for img, _, _ in test_exp.dataset],
-            use_amp=config['use_amp'],
-            latent_size=config['latent_size'],
-            specific_size=config['specific_size'],
+            use_amp=cfg['use_amp'],
+            latent_size=cfg['latent_size'],
+            specific_size=cfg['specific_size'],
         )
 
         all_z = torch.cat((all_z, z))
@@ -733,16 +729,16 @@ def main(config):
             labels=[labels[task]],
             decoder=decoder,
             n_classes=n_classes,
-            latent_dim=config['latent_size'],
-            use_amp=config['use_amp'])
+            latent_dim=cfg['latent_size'],
+            use_amp=cfg['use_amp'])
 
         z, specif, combined = get_features(
             encoder,
             specific,
             gen_images,
-            use_amp=config['use_amp'],
-            latent_size=config['latent_size'],
-            specific_size=config['specific_size'],
+            use_amp=cfg['use_amp'],
+            latent_size=cfg['latent_size'],
+            specific_size=cfg['specific_size'],
         )
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
@@ -764,9 +760,9 @@ def main(config):
                     n_jobs=-1)
         tsne_results = tsne.fit_transform(all_combined.detach().numpy())
         utils.plot.tsne_plot(tsne_results, all_labels,
-                             f'{config["plt_path"]}/combined_task_{task}.png')
+                             f'{cfg["plt_path"]}/combined_task_{task}.png')
 
-        if config['save_images']:
+        if cfg['save_images']:
             utils.plot.save_images(gen_images, gen_labels, img_path)
 
     return avg_acc_test_set, stdev_acc_test_set

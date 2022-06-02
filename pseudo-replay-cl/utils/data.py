@@ -53,9 +53,11 @@ def load_data(dataset, n_tasks):
         exit()
 
     n_classes = data.n_classes
+    classes_order = data.classes_order
     data = benchmark_with_validation_stream(benchmark_instance=data,
                                             validation_size=0.05)
     data.n_classes = n_classes
+    data.classes_order = classes_order
     return data
 
 
