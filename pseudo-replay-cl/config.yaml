@@ -18,6 +18,9 @@ arch_decoder: 'Conv'
 lr_specific: 2e-4
 lr_classifier: 2e-4
 lr_autoencoder: 1e-3 
+lr_discriminator: 2e-4
+early_stop_count_vae: 100
+early_stop_count_cls: 100
 ### Logging parameters ###
 plot_tsne: false
 save_images: true

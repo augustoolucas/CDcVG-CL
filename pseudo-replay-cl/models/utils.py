@@ -305,7 +305,7 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader, discriminat
                            step=epoch)
         
         if valid_loss < best_valid_loss:
-            early_stop_count = 15
+            early_stop_count = config['early_stop_count_vae']
             best_valid_loss = valid_loss
             best_encoder = copy.deepcopy(encoder)
             best_decoder = copy.deepcopy(decoder)
@@ -386,7 +386,7 @@ def train_classifier(config, encoder, specific, classifier, train_loader, val_lo
                            step=epoch)
 
         if valid_loss < best_valid_loss:
-            early_stop_count = 10
+            early_stop_count = config['early_stop_count_cls']
             best_valid_loss = valid_loss
             best_classifier = copy.deepcopy(classifier)
         else:
