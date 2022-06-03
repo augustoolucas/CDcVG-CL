@@ -83,10 +83,11 @@ def train_vae(config, encoder, decoder, train_loader, val_loader=None, task_id=N
 
     train_bar = tqdm(range(config['epochs_cvae']))
 
+    best_valid_loss = 1e12
     for epoch in train_bar:
         encoder.train(); decoder.train()
         epoch_rec_loss, epoch_kl_loss, epoch_disc_loss = 0, 0, 0
-        for images, labels in train_loader:
+        for images, labels, _ in train_loader:
             encoder.zero_grad(); decoder.zero_grad()
 
             labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
@@ -108,6 +109,29 @@ def train_vae(config, encoder, decoder, train_loader, val_loader=None, task_id=N
             epoch_rec_loss += rec_loss.item()
             epoch_kl_loss += kl_loss.item()
 
+        encoder.eval(); decoder.eval()
+        encoder.zero_grad(); decoder.zero_grad()
+        valid_loss = 0
+
+        with torch.inference_mode():
+            for imgs, labels, _ in val_loader:
+                labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
+                imgs = imgs.to(DEVICE)
+
+                with amp.autocast(enabled=config['use_amp']):
+                    latents, mu, var = encoder(imgs)
+                    recon_imgs = decoder(torch.cat([latents, labels_onehot],
+                                                   dim=1))
+
+                    kl_loss = kl_divergence_loss(var, mu)/len(imgs)
+                    rec_loss = pixelwise_loss(recon_imgs, imgs)/len(imgs)
+
+                kl_loss = scaler.scale(kl_loss)
+                rec_loss = scaler.scale(rec_loss)
+
+                cvae_loss = rec_loss + kl_loss
+                valid_loss += cvae_loss.item()
+
         log_str = lambda s: s if task_id is None else f'{s} Task {task_id}'
         rec_loss_str = log_str('Loss Reconstruction')
         cvae_loss_str = log_str('Loss CVAE')
@@ -121,6 +145,19 @@ def train_vae(config, encoder, decoder, train_loader, val_loader=None, task_id=N
                             cvae_loss_str: (cvae_total_loss)/len(train_loader),
                             disc_loss_str: epoch_disc_loss},
                            step=epoch)
+
+        if valid_loss < best_valid_loss:
+            early_stop_count = config['early_stop_count_vae']
+            best_valid_loss = valid_loss
+            best_encoder = copy.deepcopy(encoder)
+            best_decoder = copy.deepcopy(decoder)
+        else:
+            early_stop_count -= 1
+
+        if early_stop_count == 0:
+            encoder = best_encoder
+            decoder = best_decoder
+            break
 
 
 def train_vaegan(config, encoder, decoder, train_loader, val_loader, discriminator, task_id=None):
