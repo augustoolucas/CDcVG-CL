@@ -13,26 +13,22 @@ def onehot_encoder(labels, n_classes):
 
     return labels_onehot
 
-def load_data(dataset, n_tasks):
-    if dataset == 'MNIST':
+def load_data(cfg, n_tasks):
+    if cfg['dataset'] == 'MNIST':
         data = SplitMNIST(n_experiences=n_tasks,
                           dataset_root='./Datasets',
                           return_task_id=False,
                           shuffle=False,
                           train_transform=transforms.ToTensor(),
-                          eval_transform=transforms.ToTensor(),
-                          seed=1)
-    elif dataset == 'CIFAR10':
-        transfs = transforms.Compose([transforms.ToTensor(),
-                                      transforms.Grayscale(1)])
-        transfs = transforms.ToTensor()
+                          eval_transform=transforms.ToTensor())
+    elif cfg['dataset'] == 'CIFAR10':
         data = SplitCIFAR10(n_experiences=n_tasks,
                             dataset_root='./Datasets',
                             return_task_id=False,
                             shuffle=False,
-                            train_transform=transfs,
-                            eval_transform=transfs)
-    elif dataset == 'CIFAR10-Gray':
+                            train_transform=transforms.ToTensor(),
+                            eval_transform=transforms.ToTensor())
+    elif cfg['dataset'] == 'CIFAR10-Gray':
         transfs = transforms.Compose([transforms.ToTensor(),
                                       transforms.Grayscale(1)])
         data = SplitCIFAR10(n_experiences=n_tasks,
@@ -41,7 +37,7 @@ def load_data(dataset, n_tasks):
                             shuffle=False,
                             train_transform=transfs,
                             eval_transform=transfs)
-    elif dataset == 'FashionMNIST':
+    elif cfg['dataset'] == 'FashionMNIST':
         data = SplitFMNIST(n_experiences=n_tasks,
                            dataset_root='./Datasets',
                            return_task_id=False,
@@ -49,15 +45,16 @@ def load_data(dataset, n_tasks):
                            train_transform=transforms.ToTensor(),
                            eval_transform=transforms.ToTensor())
     else:
-        print('Invalid dataset.')
-        exit()
+        raise ValueError(f'Invalid dataset {cfg["dataset"]}')
 
-    n_classes = data.n_classes
-    classes_order = data.classes_order
-    data = benchmark_with_validation_stream(benchmark_instance=data,
-                                            validation_size=0.05)
-    data.n_classes = n_classes
-    data.classes_order = classes_order
+    if cfg['use_validation_set']:
+        n_classes = data.n_classes
+        classes_order = data.classes_order
+        data = benchmark_with_validation_stream(benchmark_instance=data,
+                                                validation_size=cfg['val_size'])
+        data.n_classes = n_classes
+        data.classes_order = classes_order
+
     return data
 
 

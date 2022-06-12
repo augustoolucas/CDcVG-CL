@@ -6,6 +6,8 @@ import mlflow
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from torch.cuda import amp
+from collections import defaultdict
+from matplotlib.ticker import MaxNLocator
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -109,11 +111,28 @@ def train_vae(config, encoder, decoder, train_loader, val_loader=None, task_id=N
             epoch_rec_loss += rec_loss.item()
             epoch_kl_loss += kl_loss.item()
 
+        log_str = lambda s: s if task_id is None else f'{s} Task {task_id}'
+        rec_loss_str = log_str('Loss Reconstruction')
+        cvae_loss_str = log_str('Loss CVAE')
+        kl_loss_str = log_str('Loss KL')
+        disc_loss_str = log_str('Loss Discriminator')
+
+        cvae_total_loss = epoch_rec_loss + epoch_kl_loss
+
+        mlflow.log_metrics({rec_loss_str: epoch_rec_loss/len(train_loader),
+                            kl_loss_str: epoch_kl_loss/len(train_loader),
+                            cvae_loss_str: (cvae_total_loss)/len(train_loader),
+                            disc_loss_str: epoch_disc_loss},
+                           step=epoch)
+
+        if not config['use_validation_set']:
+            continue
+
         encoder.eval(); decoder.eval()
         encoder.zero_grad(); decoder.zero_grad()
-        valid_loss = 0
 
         with torch.inference_mode():
+            valid_loss = 0
             for imgs, labels, _ in val_loader:
                 labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
                 imgs = imgs.to(DEVICE)
@@ -132,19 +151,10 @@ def train_vae(config, encoder, decoder, train_loader, val_loader=None, task_id=N
                 cvae_loss = rec_loss + kl_loss
                 valid_loss += cvae_loss.item()
 
-        log_str = lambda s: s if task_id is None else f'{s} Task {task_id}'
-        rec_loss_str = log_str('Loss Reconstruction')
-        cvae_loss_str = log_str('Loss CVAE')
-        kl_loss_str = log_str('Loss KL')
-        disc_loss_str = log_str('Loss Discriminator')
+        valid_loss_str = log_str('Loss VAE Validation')
+        valid_loss /= len(val_loader)
 
-        cvae_total_loss = epoch_rec_loss + epoch_kl_loss
-
-        mlflow.log_metrics({rec_loss_str: epoch_rec_loss/len(train_loader),
-                            kl_loss_str: epoch_kl_loss/len(train_loader),
-                            cvae_loss_str: (cvae_total_loss)/len(train_loader),
-                            disc_loss_str: epoch_disc_loss},
-                           step=epoch)
+        mlflow.log_metrics({valid_loss_str: valid_loss}, step=epoch)
 
         if valid_loss < best_valid_loss:
             early_stop_count = config['early_stop_count_vae']
@@ -242,15 +252,34 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader, discriminat
             if discriminator is not None:
                 epoch_disc_loss += lossG.item()
 
+        log_str = lambda s: s if task_id is None else f'{s} Task {task_id}'
+        rec_loss_str = log_str('Loss Reconstruction')
+        cvae_loss_str = log_str('Loss CVAE')
+        kl_loss_str = log_str('Loss KL')
+        disc_loss_str = log_str('Loss Discriminator')
+
+        cvae_total_loss = epoch_rec_loss + epoch_kl_loss
+
+        if discriminator is not None:
+            cvae_total_loss += epoch_disc_loss
+
+        mlflow.log_metrics({rec_loss_str: epoch_rec_loss/len(train_loader),
+                            kl_loss_str: epoch_kl_loss/len(train_loader),
+                            cvae_loss_str: (cvae_total_loss)/len(train_loader),
+                            disc_loss_str: epoch_disc_loss},
+                           step=epoch)
+
+        if not config['use_validation_set']:
+            continue
 
         encoder.eval(); decoder.eval();
         encoder.zero_grad(); decoder.zero_grad();
-        valid_loss = 0
 
         if discriminator is not None:
             discriminator.eval(); discriminator.zero_grad()
 
         with torch.inference_mode():
+            valid_loss = 0
             for imgs, labels, _ in val_loader:
                 labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
                 imgs = imgs.to(DEVICE)
@@ -277,6 +306,7 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader, discriminat
                 if discriminator is not None:
                     real_loss = scaler.scale(real_loss)
                     fake_loss = scaler.scale(fake_loss)
+
                 kl_loss = scaler.scale(kl_loss)
                 rec_loss = scaler.scale(rec_loss)
 
@@ -285,25 +315,11 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader, discriminat
                     cvae_loss += real_loss + fake_loss
                 valid_loss += cvae_loss.item()
 
-        log_str = lambda s: s if task_id is None else f'{s} Task {task_id}'
-        rec_loss_str = log_str('Loss Reconstruction')
-        cvae_loss_str = log_str('Loss CVAE')
-        kl_loss_str = log_str('Loss KL')
-        disc_loss_str = log_str('Loss Discriminator')
-        valid_loss_str = log_str('VAEGAN Validation Loss')
+        valid_loss_str = log_str('Loss VAEGAN Validation')
+        valid_loss /= len(val_loader)
 
-        cvae_total_loss = epoch_rec_loss + epoch_kl_loss
+        mlflow.log_metrics({valid_loss_str: valid_loss}, step=epoch)
 
-        if discriminator is not None:
-            cvae_total_loss += epoch_disc_loss
-
-        mlflow.log_metrics({rec_loss_str: epoch_rec_loss/len(train_loader),
-                            kl_loss_str: epoch_kl_loss/len(train_loader),
-                            cvae_loss_str: (cvae_total_loss)/len(train_loader),
-                            disc_loss_str: epoch_disc_loss,
-                            valid_loss_str: valid_loss},
-                           step=epoch)
-        
         if valid_loss < best_valid_loss:
             early_stop_count = config['early_stop_count_vae']
             best_valid_loss = valid_loss
@@ -341,7 +357,12 @@ def train_classifier(config, encoder, specific, classifier, train_loader, val_lo
     for epoch in train_bar:
         epoch_classifier_loss, epoch_acc = 0, 0
         specific.train(); classifier.train()
+        classes_count = defaultdict(int)
+
         for batch_idx, (images, labels, _) in enumerate(train_loader, start=1):
+            for cls in set(labels.tolist()):
+                classes_count[cls] += len(labels[labels == cls])
+
             specific.zero_grad(); classifier.zero_grad()
 
             images, labels = images.to(DEVICE), labels.to(DEVICE)
@@ -363,6 +384,16 @@ def train_classifier(config, encoder, specific, classifier, train_loader, val_lo
             epoch_acc += accuracy_score(output_list, labels.detach().cpu().numpy())
             epoch_classifier_loss += classifier_loss.item()
 
+        epoch_classifier_loss /= len(train_loader)
+
+        log_str = lambda s: s if task_id is None else f'{s} Task {task_id}'
+        cls_loss_str = log_str('Loss Classifier Train')
+
+        mlflow.log_metrics({cls_loss_str: epoch_classifier_loss}, step=epoch)
+
+        if not config['use_validation_set']:
+            continue
+
         specific.eval(); classifier.eval()
         valid_loss = 0
         for imgs, labels, _ in val_loader:
@@ -378,12 +409,10 @@ def train_classifier(config, encoder, specific, classifier, train_loader, val_lo
             classifier_loss = scaler.scale(classifier_loss)
             valid_loss += classifier_loss.item()
 
+        cls_valid_loss_str = log_str('Loss Classifier Validation')
+        valid_loss /= len(val_loader)
 
-        cls_loss_str = 'Loss Classifier' if task_id is None else f'Loss Classifier Task {task_id}' 
-        cls_valid_loss_str = 'Classifier Validation Loss'
-        mlflow.log_metrics({cls_loss_str: epoch_classifier_loss/len(train_loader),
-                            cls_valid_loss_str: valid_loss},
-                           step=epoch)
+        mlflow.log_metrics({cls_valid_loss_str: valid_loss}, step=epoch)
 
         if valid_loss < best_valid_loss:
             early_stop_count = config['early_stop_count_cls']
@@ -395,6 +424,27 @@ def train_classifier(config, encoder, specific, classifier, train_loader, val_lo
         if early_stop_count == 0:
             classifier = best_classifier
             break
+
+    fig = plt.figure()
+    plt.bar(list(classes_count.keys()), list(classes_count.values()))
+    ax = fig.gca()
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+    for idx, key in enumerate(classes_count):
+        ax.annotate(
+            classes_count[key],
+            xy=(idx - len(classes_count) * 0.035, classes_count[key] +
+                (max(classes_count.values()) - min(classes_count.values())) *
+                0.025),
+            fontsize=10)
+
+    plt.title(f'Task {task_id}')
+    plt.savefig(dpi=300,
+                fname=f'{task_plt_path}/classes_distribution.png',
+                bbox_inches='tight')
+    plt.close()
+
+
 
 
 def test(encoder, specific, classifier, data_loader, use_amp=False, fname=None):

@@ -112,15 +112,8 @@ def get_features(encoder,
     return all_z, all_specific, all_combined
 
 
-def train_task(config,
-               encoder,
-               decoder,
-               specific,
-               classifier,
-               train_loader,
-               tasks_labels,
-               task_id,
-               discriminator=None):
+def train_ircl_vae(config, encoder, decoder, specific, classifier,
+                   train_loader, tasks_labels, task_id):
     scaler = amp.GradScaler(enabled=config['use_amp'])
     ### ------ Optimizers ------ ###
     optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) +
@@ -131,12 +124,151 @@ def train_task(config,
     optimizer_classifier = torch.optim.Adam(classifier.parameters(),
                                             lr=float(config['lr_classifier']))
 
-    if discriminator is not None:
-        optimizer_discriminator = torch.optim.Adam(
-            discriminator.parameters(), lr=float(config['lr_discriminator']))
-        discriminator_loss = torch.nn.BCEWithLogitsLoss()
-        discriminator.train()
-        real_label, recon_label = 1, 0
+    mlflow.log_params({
+        'optimizer_cvae': 'Adam',
+        'optimizer_specific': 'Adam',
+        'optimizer_classifier': 'Adam'
+    })
+
+    ### ------ Loss Functions ------ ###
+    pixelwise_loss = torch.nn.MSELoss(reduction='sum')
+    classification_loss = torch.nn.CrossEntropyLoss()
+
+    def kl_divergence_loss(var, mu):
+        return 0.5 * torch.sum(torch.exp(var) + mu**2 - 1 - var)
+
+    mlflow.log_params({
+        'loss_fn_pixelwise': 'MSE',
+        'loss_fn_classification': 'CrossEntropyLoss'
+    })
+    ### ------ Training ------ ###
+
+    task_plt_path = f'{config["plt_path"]}/Task_{task_id}'
+
+    if not Path(task_plt_path).is_dir():
+        os.mkdir(task_plt_path)
+
+    utils.plot.visualize_train_data(train_loader, tasks_labels,
+                                    f'{task_plt_path}/train_imgs.png')
+
+    specific.train()
+    classifier.train()
+    encoder.train()
+    decoder.train()
+
+    train_bar = tqdm(range(config['epochs']))
+
+    for epoch in train_bar:
+        epoch_classifier_loss, epoch_rec_loss, epoch_kl_loss = 0, 0, 0
+        epoch_acc = 0
+        classes_count = defaultdict(int)
+
+        for batch_idx, (images, labels, _) in enumerate(train_loader, start=1):
+            for cls in set(labels.tolist()):
+                classes_count[cls] += len(labels[labels == cls])
+            ### ------ Training autoencoder ------ ###
+            encoder.zero_grad()
+            decoder.zero_grad()
+            specific.zero_grad()
+            classifier.zero_grad()
+
+            labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
+            with amp.autocast(enabled=config['use_amp']):
+                latents, mu, var = encoder(images)
+                recon_images = decoder(
+                    torch.cat([latents, labels_onehot], dim=1))
+
+                kl_loss = kl_divergence_loss(var, mu) / len(images)
+                rec_loss = pixelwise_loss(recon_images, images) / len(images)
+                cvae_loss = rec_loss + kl_loss
+
+            scaler.scale(cvae_loss).backward()
+            scaler.step(optimizer_cvae)
+
+            ### ------ Training specific module and classifier ------ ###
+
+            with amp.autocast(enabled=config['use_amp']):
+                specific_output = specific(images)
+                classifier_output = classifier(specific_output,
+                                               latents.detach())
+                classifier_loss = classification_loss(classifier_output,
+                                                      labels) / len(images)
+            scaler.scale(classifier_loss).backward()
+            scaler.step(optimizer_classifier)
+            scaler.step(optimizer_specific)
+            scaler.update()
+
+            # Logging #
+            output_list = torch.argmax(classifier_output, dim=1).tolist()
+            epoch_acc += accuracy_score(output_list,
+                                        labels.detach().cpu().numpy())
+
+            epoch_classifier_loss += classifier_loss.item()
+            epoch_rec_loss += rec_loss.item()
+            epoch_kl_loss += kl_loss.item()
+
+        epoch_loss = epoch_classifier_loss + epoch_rec_loss + epoch_kl_loss
+        mlflow.log_metrics(
+            {
+                f'loss_rec_task_{task_id}':
+                epoch_rec_loss / len(train_loader),
+                f'loss_kl_task_{task_id}':
+                epoch_kl_loss / len(train_loader),
+                f'loss_cvae_task_{task_id}':
+                (epoch_rec_loss + epoch_kl_loss) / len(train_loader),
+                f'loss_classifier_task_{task_id}':
+                epoch_classifier_loss / len(train_loader),
+                f'loss_total_task_{task_id}':
+                epoch_loss / len(train_loader)
+            },
+            step=epoch)
+
+        #val_acc = test(encoder, specific, classifier, val_loader, f'{task_plt_path}/epoch_{epoch}.png')
+
+        train_bar.set_description(
+            f'Epoch: {(epoch + 1)}/{config["epochs"]} - '
+            f'Loss: {(epoch_loss/len(train_loader)):.03f} - '
+            f'Accuracy: {(epoch_acc/len(train_loader))*100:.03f}% - ')
+        # f'Val Accuracy: {(val_acc)*100:.03f}%')
+
+    fig = plt.figure()
+    plt.bar(list(classes_count.keys()), list(classes_count.values()))
+    ax = fig.gca()
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+    for idx, key in enumerate(classes_count):
+        ax.annotate(
+            classes_count[key],
+            xy=(idx - len(classes_count) * 0.035, classes_count[key] +
+                (max(classes_count.values()) - min(classes_count.values())) *
+                0.025),
+            fontsize=10)
+
+    plt.title(f'Task {task_id}')
+    plt.savefig(dpi=300,
+                fname=f'{task_plt_path}/classes_distribution.png',
+                bbox_inches='tight')
+    plt.close()
+
+
+def train_task(config,
+               encoder,
+               decoder,
+               specific,
+               classifier,
+               train_loader,
+               tasks_labels,
+               task_id):
+    scaler = amp.GradScaler(enabled=config['use_amp'])
+    ### ------ Optimizers ------ ###
+    optimizer_cvae = torch.optim.Adam(list(encoder.parameters()) +
+                                      list(decoder.parameters()),
+                                      lr=float(config['lr_autoencoder']))
+    optimizer_specific = torch.optim.Adam(specific.parameters(),
+                                          lr=float(config['lr_specific']))
+    optimizer_classifier = torch.optim.Adam(classifier.parameters(),
+                                            lr=float(config['lr_classifier']))
 
     mlflow.log_params({
         'optimizer_cvae': 'Adam',
@@ -186,43 +318,15 @@ def train_task(config,
 
             labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
             images, labels = images.to(DEVICE), labels.to(DEVICE)
+
             with amp.autocast(enabled=config['use_amp']):
                 latents, mu, var = encoder(images)
-
-                if discriminator is not None:
-                    discriminator.zero_grad()
-                    disc_output = discriminator(images).view(-1)
-                    disc_labels = torch.full((len(images), ),
-                                             real_label,
-                                             dtype=torch.float,
-                                             device=DEVICE)
-                    lossD_real = discriminator_loss(disc_output, disc_labels)
-                    with amp.autocast(enabled=False):
-                        scaler.scale(lossD_real).backward()
-
                 recon_images = decoder(
                     torch.cat([latents, labels_onehot], dim=1))
-
-                if discriminator is not None:
-                    disc_output = discriminator(recon_images.detach()).view(-1)
-                    disc_labels.fill_(recon_label)
-                    lossD_recon = discriminator_loss(disc_output, disc_labels)
-                    with amp.autocast(enabled=False):
-                        scaler.scale(lossD_recon).backward()
-                        scaler.step(optimizer_discriminator)
-
-                if discriminator is not None:
-                    decoder.zero_grad()
-                    disc_output = discriminator(recon_images).view(-1)
-                    disc_labels.fill_(real_label)
-                    lossG = discriminator_loss(disc_output, disc_labels)
 
                 kl_loss = kl_divergence_loss(var, mu) / len(images)
                 rec_loss = pixelwise_loss(recon_images, images) / len(images)
                 cvae_loss = rec_loss + kl_loss
-
-            if discriminator is not None:
-                cvae_loss += lossG
 
             scaler.scale(cvae_loss).backward()
             scaler.step(optimizer_cvae)
@@ -301,32 +405,6 @@ def train_task(config,
                 fname=f'{task_plt_path}/classes_distribution.png',
                 bbox_inches='tight')
     plt.close()
-
-    utils.plot.plot_losses(classifier_loss_epochs,
-                           xlabel='Epoch',
-                           ylabel='Loss',
-                           title=f'Task {task_id}',
-                           fname=f'{task_plt_path}/loss-classifier.png')
-
-    utils.plot.plot_losses(total_loss_epochs,
-                           xlabel='Epoch',
-                           ylabel='Loss',
-                           title=f'Task {task_id}',
-                           fname=f'{task_plt_path}/loss-total.png')
-
-    utils.plot.plot_losses(cvae_loss_epochs,
-                           xlabel='Epoch',
-                           ylabel='Reconstruction + KL Loss',
-                           title=f'Task {task_id}',
-                           fname=f'{task_plt_path}/loss-cvae.png')
-
-    utils.plot.multi_plots(data1=rec_loss_epochs,
-                           data2=kl_loss_epochs,
-                           xlabel='Epoch',
-                           ylabel1='Reconstruction Loss',
-                           ylabel2='KL Loss',
-                           title=f'Task {task_id}',
-                           fname=f'{task_plt_path}/loss-rec-kl.png')
 
 
 def sne(path, encoder, specific, classifier, knn, data_loader, data_type):
@@ -472,7 +550,7 @@ def main(cfg):
 
     ## ------ Load Data ------ ###
     n_tasks = 5
-    dataset = utils.data.load_data(cfg['dataset'], n_tasks)
+    dataset = utils.data.load_data(cfg, n_tasks)
 
     n_classes = dataset.n_classes
     labels = dataset.classes_order
@@ -493,10 +571,19 @@ def main(cfg):
 
     acc_of_task_t_at_time_t = []
     train_sets_tasks = []
-    data_splits = zip(dataset.train_stream, dataset.test_stream,
-                      dataset.valid_stream)
 
-    for task_label, (train_exp, test_exp, val_exp) in enumerate(data_splits):
+    if cfg['use_validation_set']:
+        data_splits = zip(dataset.train_stream, dataset.test_stream,
+                          dataset.valid_stream)
+    else:
+        data_splits = zip(dataset.train_stream, dataset.test_stream)
+
+    for task_label, splits in enumerate(data_splits):
+        if cfg['use_validation_set']:
+            train_exp, test_exp, val_exp = splits
+        else:
+            train_exp, test_exp = splits
+
         print(f'Training Task {task_label}')
 
         task_plt_path = f'{cfg["plt_path"]}/Task_{task_label}'
@@ -505,12 +592,21 @@ def main(cfg):
             os.mkdir(task_plt_path)
 
         train_set = train_exp.dataset
-        val_set = val_exp.dataset
+
+        if cfg['use_validation_set']:
+            val_set = val_exp.dataset
+        else:
+            val_set = ConcatDataset([
+                test_split.dataset
+
+                for test_split in dataset.test_stream[:task_label + 1]
+            ])
 
         if task_label > 0:
             classes_to_gen = list(
                 set(train_exp.classes_seen_so_far) -
                 set(train_exp.classes_in_this_experience))
+
             gen_images, gen_labels = gen_pseudo_samples(
                 n_samples=cfg['n_replay'],
                 labels=classes_to_gen,
@@ -519,28 +615,39 @@ def main(cfg):
                 latent_dim=cfg['latent_size'])
 
             replay_set = AvalancheTensorDataset(gen_images, gen_labels)
-            replay_train_set, replay_val_set = random_split(
-                replay_set, [
-                    len(replay_set) - len(val_set) * task_label,
-                    len(val_set) * task_label
-                ])
-            train_set = ConcatDataset([train_set, replay_train_set])
-            val_set = ConcatDataset([val_set, replay_val_set])
 
-        train_loader = utils.data.get_dataloader(train_set,
-                                                 cfg['batch_size'])
+            if not cfg['use_validation_set']:
+                train_set = ConcatDataset([train_set, replay_set])
+            else:
+                replay_train_set, replay_val_set = random_split(
+                    replay_set, [
+                        len(replay_set) - len(val_set) * task_label,
+                        len(val_set) * task_label
+                    ])
+                train_set = ConcatDataset([train_set, replay_train_set])
+                val_set = ConcatDataset([val_set, replay_val_set])
+
         train_sets_tasks.append(train_set)
 
+        train_loader = utils.data.get_dataloader(train_set, cfg['batch_size'])
         val_loader = utils.data.get_dataloader(val_set, cfg['batch_size'])
 
         if cfg['decoupled_cvae_training']:
-            models.utils.train_vaegan(config=cfg,
-                                      encoder=encoder,
-                                      decoder=decoder,
-                                      discriminator=discriminator,
-                                      train_loader=train_loader,
-                                      val_loader=val_loader,
-                                      task_id=task_label)
+            if cfg['use_discriminator']:
+                models.utils.train_vaegan(config=cfg,
+                                          encoder=encoder,
+                                          decoder=decoder,
+                                          discriminator=discriminator,
+                                          train_loader=train_loader,
+                                          val_loader=val_loader,
+                                          task_id=task_label)
+            else:
+                models.utils.train_vae(config=cfg,
+                                       encoder=encoder,
+                                       decoder=decoder,
+                                       train_loader=train_loader,
+                                       val_loader=val_loader,
+                                       task_id=task_label)
 
             models.utils.train_classifier(config=cfg,
                                           encoder=encoder,
@@ -549,17 +656,27 @@ def main(cfg):
                                           train_loader=train_loader,
                                           val_loader=val_loader,
                                           task_id=task_label)
-
         else:
-            train_task(config=cfg,
-                       encoder=encoder,
-                       decoder=decoder,
-                       specific=specific,
-                       classifier=classifier,
-                       discriminator=discriminator,
-                       train_loader=train_loader,
-                       tasks_labels=train_exp.classes_in_this_experience,
-                       task_id=task_label)
+            if cfg['use_discriminator']:
+                train_task(config=cfg,
+                           encoder=encoder,
+                           decoder=decoder,
+                           specific=specific,
+                           classifier=classifier,
+                           discriminator=discriminator,
+                           train_loader=train_loader,
+                           tasks_labels=train_exp.classes_in_this_experience,
+                           task_id=task_label)
+            else:
+                train_ircl_vae(
+                    config=cfg,
+                    encoder=encoder,
+                    decoder=decoder,
+                    specific=specific,
+                    classifier=classifier,
+                    train_loader=train_loader,
+                    tasks_labels=train_exp.classes_in_this_experience,
+                    task_id=task_label)
 
         models.utils.test(encoder=encoder,
                           specific=specific,
@@ -590,7 +707,7 @@ def main(cfg):
                                                      test_loader)
         gen_images, _ = gen_pseudo_samples(
             n_samples=128,
-            labels=test_exp.classes_in_this_experience,
+            labels=train_exp.classes_seen_so_far,
             decoder=decoder,
             n_classes=n_classes,
             latent_dim=cfg['latent_size'])
@@ -601,15 +718,14 @@ def main(cfg):
     ACCs_test_set = []
     BWTs_test_set = []
 
-    test_set = ConcatDataset([exp.dataset for exp in dataset.test_stream])
-    test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
-    acc_train = models.utils.test(
-        encoder,
-        specific,
-        classifier,
-        test_loader,
-        use_amp=cfg['use_amp'],
-        fname=f'{cfg["plt_path"]}/test_test_set.png')
+    test_loader = utils.data.get_dataloader(dataset.original_test_dataset,
+                                            batch_size=1000)
+    models.utils.test(encoder,
+                      specific,
+                      classifier,
+                      test_loader,
+                      use_amp=cfg['use_amp'],
+                      fname=f'{cfg["plt_path"]}/test_test_set.png')
 
     for task, test_exp in enumerate(dataset.test_stream):
         test_set = copy.copy(test_exp.dataset)
@@ -623,7 +739,7 @@ def main(cfg):
 
         train_loader = utils.data.get_dataloader(train_sets_tasks[task],
                                                  batch_size=1000)
-        acc_train = models.utils.test(
+        models.utils.test(
             encoder,
             specific,
             classifier,
@@ -633,8 +749,8 @@ def main(cfg):
 
         mlflow.log_metrics(
             {
-                f'Task Accuracy Test Set': acc_test,
-                f'Task BWT Test': bwt_test
+                'Task Accuracy Test Set': acc_test,
+                'Task BWT Test': bwt_test
             },
             step=task)
 
@@ -673,17 +789,17 @@ def main(cfg):
                 f'Average Test Set Backward Transfer: {avg_bwt_test_set*100:.02f}%\n',
                 file=file)
 
-    test_loader = utils.data.get_dataloader(dataset.original_test_dataset,
-                                            batch_size=1000)
-    train_loader = utils.data.get_dataloader(dataset.original_train_dataset,
-                                             cfg['batch_size'])
-
     if cfg['plot_tsne']:
+        test_loader = utils.data.get_dataloader(dataset.original_test_dataset,
+                                                batch_size=1000)
+        train_loader = utils.data.get_dataloader(
+            dataset.original_train_dataset, cfg['batch_size'])
+
         knn_ = knn(encoder, specific, train_loader)
-        sne(cfg['exp_path'], encoder, specific, classifier, knn_,
-            test_loader, 'test')
-        sne(cfg['exp_path'], encoder, specific, classifier, knn_,
-            train_loader, 'train')
+        sne(cfg['exp_path'], encoder, specific, classifier, knn_, test_loader,
+            'test')
+        sne(cfg['exp_path'], encoder, specific, classifier, knn_, train_loader,
+            'train')
     """
     cls = train_mlp(cfg, encoder, specific, classifier, train_loader)
     acc = test(encoder, specific, cls, test_loader)
@@ -726,7 +842,7 @@ def main(cfg):
 
         gen_images, gen_labels = gen_pseudo_samples(
             n_samples=1024,
-            labels=[labels[task]],
+            labels=test_exp.classes_in_this_experience,
             decoder=decoder,
             n_classes=n_classes,
             latent_dim=cfg['latent_size'],
@@ -743,7 +859,7 @@ def main(cfg):
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
         all_combined = torch.cat((all_combined, combined))
-        all_labels.extend((10 + gen_labels).tolist())
+        all_labels.extend([gl + 10 for gl in gen_labels])
 
         def k(x):
             return f'{x} Real' if x < 10 else f'{x - 10} Generated'
