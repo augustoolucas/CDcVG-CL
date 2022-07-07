@@ -1,29 +1,34 @@
 ---
 ### Training parameters ###
-use_amp: false
+optuna: false
+use_amp: true
+use_discriminator: false
 decoupled_cvae_training: true
+use_validation_set: false
 latent_size: 32
-n_replay: 5000 # per class
-epochs: 2 # used only if decoupled_cvae_training is false
-epochs_cvae: 50
-epochs_classifier: 5
 specific_size: 20
+n_replay: 5000 # per class
+epochs: 10 # used only if decoupled_cvae_training is false
+epochs_cvae: 15
+epochs_classifier: 10
 batch_size: 128
 dataset: 'MNIST'
 balanced: false
 softmax: false
-arch_specific: 'Conv'
-arch_encoder: 'Conv'
-arch_decoder: 'Conv'
-lr_specific: 2e-4
-lr_classifier: 2e-4
-lr_autoencoder: 1e-3 
-lr_discriminator: 2e-4
-early_stop_count_vae: 100
-early_stop_count_cls: 100
+arch_specific: 'MLP'
+arch_encoder: 'IRCL'
+arch_decoder: 'IRCL'
+arch_disc: 'MLP'
+lr_specific: 1e-4
+lr_classifier: 1e-4
+lr_autoencoder: 1e-2 
+lr_discriminator: 1e-2
+early_stop_count_vae: 5
+early_stop_count_cls: 5
+val_size: 0.05
 ### Logging parameters ###
 plot_tsne: false
-save_images: true
+save_images: false
 root: 'Results'
 runs: 1
 plt_path: 'Plots'

@@ -151,11 +151,6 @@ def train_ircl_vae(config, encoder, decoder, specific, classifier,
     utils.plot.visualize_train_data(train_loader, tasks_labels,
                                     f'{task_plt_path}/train_imgs.png')
 
-    specific.train()
-    classifier.train()
-    encoder.train()
-    decoder.train()
-
     train_bar = tqdm(range(config['epochs']))
 
     for epoch in train_bar:
@@ -167,10 +162,8 @@ def train_ircl_vae(config, encoder, decoder, specific, classifier,
             for cls in set(labels.tolist()):
                 classes_count[cls] += len(labels[labels == cls])
             ### ------ Training autoencoder ------ ###
-            encoder.zero_grad()
-            decoder.zero_grad()
-            specific.zero_grad()
-            classifier.zero_grad()
+            encoder.train(); decoder.train();
+            encoder.zero_grad(); decoder.zero_grad()
 
             labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
             images, labels = images.to(DEVICE), labels.to(DEVICE)
@@ -187,6 +180,8 @@ def train_ircl_vae(config, encoder, decoder, specific, classifier,
             scaler.step(optimizer_cvae)
 
             ### ------ Training specific module and classifier ------ ###
+            specific.train(); classifier.train()
+            specific.zero_grad(); classifier.zero_grad()
 
             with amp.autocast(enabled=config['use_amp']):
                 specific_output = specific(images)
@@ -658,15 +653,15 @@ def main(cfg):
                                           task_id=task_label)
         else:
             if cfg['use_discriminator']:
-                train_task(config=cfg,
-                           encoder=encoder,
-                           decoder=decoder,
-                           specific=specific,
-                           classifier=classifier,
-                           discriminator=discriminator,
-                           train_loader=train_loader,
-                           tasks_labels=train_exp.classes_in_this_experience,
-                           task_id=task_label)
+                train_ircl_vaegan(config=cfg,
+                                  encoder=encoder,
+                                  decoder=decoder,
+                                  specific=specific,
+                                  classifier=classifier,
+                                  discriminator=discriminator,
+                                  train_loader=train_loader,
+                                  tasks_labels=train_exp.classes_in_this_experience,
+                                  task_id=task_label)
             else:
                 train_ircl_vae(
                     config=cfg,
