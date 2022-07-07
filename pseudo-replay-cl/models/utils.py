@@ -354,6 +354,8 @@ def train_classifier(config, encoder, specific, classifier, train_loader, val_lo
     train_bar = tqdm(range(config['epochs_classifier']))
     best_valid_loss = 1e12
 
+    task_plt_path = f'{config["plt_path"]}/Task_{task_id}'
+
     for epoch in train_bar:
         epoch_classifier_loss, epoch_acc = 0, 0
         specific.train(); classifier.train()
