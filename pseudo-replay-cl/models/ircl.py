@@ -49,7 +49,7 @@ class Decoder(nn.Module):
         self.model = nn.Sequential(
             nn.Linear(input_dim, n_hidden),
             nn.BatchNorm1d(n_hidden),
-            nn.ReLU (inplace=True),
+            nn.ReLU(inplace=True),
             nn.Linear(n_hidden, int(np.prod(img_shape))),
             nn.Sigmoid(),
         )
