@@ -2,6 +2,8 @@ import utils
 import torch
 import models
 import mlflow
+from skimage.metrics import structural_similarity as ssim
+from skimage import img_as_float
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from torch.cuda import amp
@@ -148,6 +150,7 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discri
     for epoch in train_bar:
         encoder.train(); decoder.train()
         epoch_rec_loss, epoch_kl_loss, epoch_disc_loss = 0, 0, 0
+        ssim_epoch = 0
         for images, labels in train_loader:
             encoder.zero_grad(); decoder.zero_grad()
 
@@ -170,6 +173,15 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discri
 
                 recon_images = decoder(torch.cat([latents, labels_onehot],
                                                  dim=1))
+
+                """
+                for img, recon_img in zip(images, recon_images):
+                    img = img_as_float(img.squeeze().detach().cpu().numpy())
+                    recon_img = img_as_float(recon_img.squeeze().detach().cpu().numpy())
+                    ssim_epoch += ssim(img, recon_img,
+                                       data_range=recon_img.max() - recon_img.min())
+                ssim_epoch /= len(images)
+                """
 
                 # Train Discriminator with all-recon batch
                 if discriminator is not None:
@@ -208,6 +220,7 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discri
         cvae_loss_str = log_str('Loss CVAE')
         kl_loss_str = log_str('Loss KL')
         disc_loss_str = log_str('Loss Discriminator')
+        ssim_str = log_str('SSIM')
 
         cvae_total_loss = epoch_rec_loss + epoch_kl_loss
 
@@ -218,6 +231,7 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discri
                             kl_loss_str: epoch_kl_loss/len(train_loader),
                             cvae_loss_str: (cvae_total_loss)/len(train_loader),
                             disc_loss_str: epoch_disc_loss},
+                            #ssim_str: ssim_epoch/len(train_loader)},
                            step=epoch)
 
 
@@ -284,19 +298,35 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
                 optimizer_specific.step()
 
 
-def test(encoder, specific, classifier, data_loader, use_amp=False, fname=None):
-    encoder.eval(); classifier.eval(); specific.eval()
+def test(encoder, decoder, specific, classifier, data_loader, use_amp=False, fname=None, log_metrics=False):
+    encoder.eval(); classifier.eval(); specific.eval(); decoder.eval()
 
+    pixelwise_loss = torch.nn.MSELoss(reduction='sum')
     with torch.no_grad():
         batch_acc = 0
         all_outputs = []
         all_labels = []
+        ssim_test = 0
+        n_imgs = 0
+        rec_loss = 0
         for images, labels in data_loader:
+            n_imgs += len(images)
             images = images.to(DEVICE)
+            labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
             with amp.autocast(enabled=use_amp):
-                latents, _, _ = encoder(images)
+                latents, mu, var = encoder(images)
+                recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
+                rec_loss = pixelwise_loss(recon_images, images)/len(images)
+
                 specific_output = specific(images)
                 classifier_output = classifier(specific_output, latents.detach())
+
+            for img, recon_img in zip(images, recon_images):
+                img = img_as_float(img.squeeze().detach().cpu().numpy())
+                recon_img = img_as_float(recon_img.squeeze().detach().cpu().numpy())
+                ssim_test += ssim(img, recon_img,
+                                  data_range=recon_img.max() - recon_img.min())
+
 
             classifier_output = torch.argmax(classifier_output, dim=1).tolist()
             batch_acc += accuracy_score(classifier_output, labels.tolist())
@@ -304,6 +334,12 @@ def test(encoder, specific, classifier, data_loader, use_amp=False, fname=None):
             if fname:
                 all_outputs.extend(classifier_output)
                 all_labels.extend(labels.tolist())
+
+        ssim_test /= n_imgs
+        rec_loss /= len(data_loader)
+        if log_metrics:
+            mlflow.log_metric('SSIM Test', ssim_test)
+            mlflow.log_metric('Reconstruction Loss Test', rec_loss.item())
 
         batch_acc /= len(data_loader)
 
@@ -317,5 +353,5 @@ def test(encoder, specific, classifier, data_loader, use_amp=False, fname=None):
         plt.savefig(dpi=300, fname=fname, bbox_inches='tight')
         plt.close()
 
-    return batch_acc 
+    return batch_acc
 

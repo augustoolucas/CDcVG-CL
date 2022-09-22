@@ -16,9 +16,11 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from pathlib import Path
 from torch.cuda import amp
-from sklearnex import patch_sklearn
-patch_sklearn()
+#from sklearnex import patch_sklearn
+#patch_sklearn()
 from sklearn.manifold import TSNE
+from skimage.metrics import structural_similarity as ssim
+from skimage import img_as_float
 from models.utils import DEVICE
 from collections import defaultdict
 from matplotlib.ticker import MaxNLocator
@@ -132,6 +134,7 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
     classifier_loss_epochs, total_loss_epochs = [], []
     for epoch in train_bar:
         epoch_classifier_loss, epoch_rec_loss, epoch_kl_loss = 0, 0, 0
+        ssim_epoch = 0
         epoch_acc = 0
         classes_count = defaultdict(int)
         for batch_idx, (images, labels) in enumerate(train_loader, start=1):
@@ -158,6 +161,16 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
                         scaler.scale(lossD_real).backward()
 
                 recon_images = decoder(torch.cat([latents, labels_onehot], dim=1))
+
+                """
+                for img, recon_img in zip(images, recon_images):
+                    img = img_as_float(img.squeeze().detach().cpu().numpy())
+                    recon_img = img_as_float(recon_img.squeeze().detach().cpu().numpy())
+                    ssim_epoch += ssim(img, recon_img,
+                                       data_range=recon_img.max() - recon_img.min())
+
+                ssim_epoch /= len(images)
+                """
 
                 if discriminator is not None:
                     disc_output = discriminator(recon_images.detach()).view(-1)
@@ -209,7 +222,8 @@ def train_task(config, encoder, decoder, specific, classifier, train_loader, tas
                             f'loss_cvae_task_{task_id}': (epoch_rec_loss + epoch_kl_loss)/len(train_loader),
                             f'loss_classifier_task_{task_id}': epoch_classifier_loss/len(train_loader),
                             f'loss_total_task_{task_id}': epoch_loss/len(train_loader)},
-                          step=epoch)
+                            #f'SSIM {task_id}': ssim_epoch/len(train_loader)},
+                           step=epoch)
 
         rec_loss_epochs.append(epoch_rec_loss/len(train_loader))
         kl_loss_epochs.append(epoch_kl_loss/len(train_loader))
@@ -398,6 +412,7 @@ def main(config):
     if config['use_discriminator']:
         discriminator = models.utils.load_discriminator(img_shape, config)
 
+    print(discriminator)
     ### ------ Train the sequence of tasks ------ ###
 
     acc_of_task_t_at_time_t = []
@@ -436,7 +451,7 @@ def main(config):
                                       encoder=encoder,
                                       decoder=decoder,
                                       discriminator=discriminator,
-                                      data_loader=train_loader,
+                                      train_loader=train_loader,
                                       task_id=task)
 
             models.utils.train_classifier(config=config,
@@ -458,6 +473,7 @@ def main(config):
                        task_id=task)
 
         models.utils.test(encoder=encoder,
+             decoder=decoder,
              specific=specific,
              classifier=classifier,
              data_loader=val_loader,
@@ -465,6 +481,7 @@ def main(config):
              fname=f'{task_plt_path}/test_set.png')
 
         models.utils.test(encoder=encoder,
+             decoder=decoder,
              specific=specific,
              classifier=classifier,
              data_loader=train_loader,
@@ -474,6 +491,7 @@ def main(config):
         test_set = copy.copy(test_tasks[task])
         test_loader = utils.data.get_dataloader(test_set, batch_size=128)
         acc = models.utils.test(encoder=encoder,
+                   decoder=decoder,
                    specific=specific,
                    classifier=classifier,
                    data_loader=test_loader,
@@ -503,17 +521,20 @@ def main(config):
     test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
     acc_train = models.utils.test(
                                 encoder,
+                                decoder,
                                 specific,
                                 classifier,
                                 test_loader,
                                 use_amp=config['use_amp'],
-                                fname=f'{config["plt_path"]}/test_test_set.png'
+                                fname=f'{config["plt_path"]}/test_test_set.png',
+                                log_metrics=True
                                 )
 
     for task in range(n_tasks):
         test_set = copy.copy(test_tasks[task])
         test_loader = utils.data.get_dataloader(test_set, batch_size=1000)
         acc_test = models.utils.test(encoder,
+                                     decoder,
                                      specific,
                                      classifier,
                                      test_loader,
@@ -523,6 +544,7 @@ def main(config):
         train_loader = utils.data.get_dataloader(train_sets_tasks[task], batch_size=1000)
         acc_train = models.utils.test(
                                     encoder,
+                                    decoder,
                                     specific,
                                     classifier,
                                     train_loader,
@@ -618,7 +640,7 @@ def main(config):
         all_z = torch.cat((all_z, z))
         all_specific = torch.cat((all_specific, specif))
         all_combined = torch.cat((all_combined, combined))
-        all_labels.extend(test_tasks[task].targets.tolist())
+        all_labels.extend(test_tasks[task].targets)
 
         gen_images, gen_labels = gen_pseudo_samples(
                                             n_samples=1024,
