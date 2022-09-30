@@ -147,7 +147,9 @@ class Discriminator(nn.Module):
         )
 
         feat_map_dim = (128, 2, 2) if height == 28 else (128, 2, 2)
-        self.linear_block = nn.Sequential(nn.Linear(np.prod(feat_map_dim), 1))
+        self.linear_block = nn.Linear(np.prod(feat_map_dim), 1)
+        #self.linear_block = nn.Sequential(nn.Linear(np.prod(feat_map_dim), 1),
+        #                                  nn.Sigmoid())
 
     def forward(self, img):
         x = self.conv_block(img)

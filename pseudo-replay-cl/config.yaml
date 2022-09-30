@@ -1,12 +1,14 @@
 ---
 ### Training parameters ###
-use_amp: false
+use_amp: true
+use_discriminator: true
+optuna: false
 decoupled_cvae_training: true
 latent_size: 32
 n_replay: 5000 # per class
-epochs: 2 # used only if decoupled_cvae_training is false
-epochs_cvae: 50
-epochs_classifier: 5
+epochs: 5 # used only if decoupled_cvae_training is false
+epochs_cvae: 70
+epochs_classifier: 25
 specific_size: 20
 batch_size: 128
 dataset: 'MNIST'
@@ -15,12 +17,14 @@ softmax: false
 arch_specific: 'Conv'
 arch_encoder: 'Conv'
 arch_decoder: 'Conv'
-lr_specific: 2e-4
-lr_classifier: 2e-4
+arch_disc: 'Conv'
+lr_specific: 4e-4
+lr_classifier: 4e-4
 lr_autoencoder: 1e-3 
+lr_discriminator: 2e-4
 ### Logging parameters ###
 plot_tsne: false
-save_images: true
+save_images: false
 root: 'Results'
 runs: 1
 plt_path: 'Plots'
