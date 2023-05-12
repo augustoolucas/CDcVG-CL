@@ -54,6 +54,8 @@ def load_classifier(n_classes, config):
                                        classification_n_hidden=40,
                                        n_classes=n_classes,
                                        softmax=config['softmax'])
+    if config['arch_classifier'] == 'FF':
+        classifier = models.ff_model.CModel()
 
     classifier = classifier.to(DEVICE)
 
@@ -237,11 +239,11 @@ def train_vaegan(config, encoder, decoder, train_loader, val_loader=None, discri
 
 def train_classifier(config, encoder, specific, classifier, data_loader, task_id=None):
     scaler = amp.GradScaler(enabled=config['use_amp'])
-    encoder.eval(); specific.train(); classifier.train()
+    encoder.eval(); specific.train();# classifier.train()
     optimizer_specific = torch.optim.Adam(specific.parameters(),
                                           lr=float(config['lr_specific']))
-    optimizer_classifier = torch.optim.Adam(classifier.parameters(),
-                                            lr=float(config['lr_classifier']))
+    #optimizer_classifier = torch.optim.Adam(classifier.parameters(),
+                                            #lr=float(config['lr_classifier']))
 
     ### ------ Loss Function ------ ###
     classification_loss = torch.nn.CrossEntropyLoss()
@@ -254,10 +256,11 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
 
     for epoch in train_bar:
         epoch_classifier_loss, epoch_acc = 0, 0
-        classifier.train()
+        #classifier.train()
         for batch_idx, (images, labels) in enumerate(data_loader, start=1):
             specific.zero_grad(); classifier.zero_grad()
 
+            labels_onehot = utils.data.onehot_encoder(labels, 10).to(DEVICE)
             images, labels = images.to(DEVICE), labels.to(DEVICE)
 
             with amp.autocast(enabled=config['use_amp']):
@@ -265,11 +268,14 @@ def train_classifier(config, encoder, specific, classifier, data_loader, task_id
                     latents, _, _ = encoder(images)
 
                 specific_embedding = specific(images)
-                classifier_output = classifier(specific_embedding, latents.detach())
+                #ff_iter = [(ebd, l) for ebd, l in zip(torch.cat([specific_embedding, latents.detach()], dim=1), labels)]
+                x_pos, x_neg = models.ff_data.format_data(torch.cat([specific_embedding, latents.detach()], dim=1), labels)
+                classifier.train(x_pos, x_neg, num_epochs=1)
+                classifier_output = classifier.predict(torch.cat([specific_embedding, latents.detach()], dim=1))
                 classifier_loss = classification_loss(classifier_output, labels)/len(images)
 
-            scaler.scale(classifier_loss).backward()
-            scaler.step(optimizer_classifier)
+            #scaler.scale(classifier_loss).backward()
+            #scaler.step(optimizer_classifier)
             scaler.step(optimizer_specific)
             scaler.update()
 

@@ -1,25 +1,26 @@
 ---
 ### Training parameters ###
 use_amp: true
-use_discriminator: true
+use_discriminator: false
 optuna: false
 decoupled_cvae_training: true
 latent_size: 32
 n_replay: 5000 # per class
 epochs: 5 # used only if decoupled_cvae_training is false
-epochs_cvae: 70
-epochs_classifier: 25
+epochs_cvae: 40
+epochs_classifier: 5
 specific_size: 20
 batch_size: 128
 dataset: 'MNIST'
 balanced: false
 softmax: false
-arch_specific: 'Conv'
-arch_encoder: 'Conv'
-arch_decoder: 'Conv'
+arch_classifier: 'FF'
+arch_specific: 'MLP'
+arch_encoder: 'IRCL'
+arch_decoder: 'IRCL'
 arch_disc: 'Conv'
-lr_specific: 4e-4
-lr_classifier: 4e-4
+lr_specific: 2e-4
+lr_classifier: 2e-4
 lr_autoencoder: 1e-3 
 lr_discriminator: 2e-4
 ### Logging parameters ###
